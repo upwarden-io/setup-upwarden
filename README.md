@@ -1,57 +1,132 @@
-# `setup-upwarden`
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset=".github/upwarden-hero-dark.png">
+    <img src=".github/upwarden-hero-light.png" alt="Upwarden" width="480">
+  </picture>
+</p>
 
-**Authenticate a GitHub Actions job to an [Upwarden](https://upwarden.io)
-package registry (npm / pip / maven) in two lines.**
+<h1 align="center">setup-upwarden</h1>
 
-This is the Upwarden equivalent of
-[`google-github-actions/auth`](https://github.com/google-github-actions/auth):
-it replaces a hand-rolled *"mint a GitHub OIDC token → `curl` the exchange →
-write `.npmrc`"* dance with a single `uses:` step. After it runs, `npm ci` /
-`pip install` / `mvn` just work — every request flows through the Upwarden proxy,
-authenticated and attributed.
+<p align="center">
+  <strong>Keyless OIDC auth for CI — every dependency fetch authenticated, attributed, and policy-enforced, in two lines.</strong>
+</p>
 
-```yaml
-- uses: upwarden-io/setup-upwarden@v1
-  with:
-    ecosystem: npm
-    tenant-vk: ${{ secrets.UPWARDEN_TENANT_VK }}
-- run: npm ci   # flows through npm.pkg.upwarden.io, authenticated
-```
-
-It is a **composite action** — the `action.yml` (plus the embedded, auditable
-`bash`) *is* the artifact. There is no compiled/bundled JavaScript to trust.
+<p align="center">
+  <a href="https://github.com/marketplace/actions/setup-upwarden"><img src="https://img.shields.io/github/v/release/upwarden-io/setup-upwarden?label=marketplace&color=3DDC97" alt="Marketplace version" /></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/github/license/upwarden-io/setup-upwarden?color=3DDC97" alt="License" /></a>
+</p>
 
 ---
 
-## Table of contents
+**Keyless OIDC — no stored registry credentials.** Package managers aren't
+OIDC-aware, so Upwarden mints a short-lived, per-run token from your CI OIDC
+identity automatically. Drop in one `uses:` step and `npm ci` / `pip install` /
+`mvn` just work — every request flows through the Upwarden proxy, authenticated
+and attributed to the workflow that made it.
 
-- [Quick start](#quick-start) — 2-line snippet per auth mode and per ecosystem
-- [Auth modes](#auth-modes) — `static` / `keyed` / `keyless`
-- [Inputs](#inputs) · [Outputs](#outputs)
-- [What it writes, per ecosystem](#what-it-writes-per-ecosystem)
-- [Security](#security) — pinning, provenance, least-privilege
-- [Versioning](#versioning) — `@v1` moving vs pinned `@vX.Y.Z` vs `@<sha>`
-- [How this maps to GCP](#how-this-maps-to-gcp-google-github-actionsauth)
-- [SECURITY.md](./SECURITY.md) · [PUBLISHING.md](./PUBLISHING.md)
+It is a **composite action** — the `action.yml` (plus the embedded, auditable
+`bash`) *is* the artifact. There is no compiled or bundled JavaScript to trust:
+the entire behavior is readable in one file.
+
+---
+
+## The gap it closes
+
+In most CI pipelines, dependency fetches are **unauthenticated and
+unattributed** — `npm ci` and `pip install` pull from public registries with no
+identity on the request and no record of which workflow pulled what. That is an
+unguarded door in your software supply chain: nothing proves a fetch came from
+*your* build, and nothing lets you enforce policy on what your builds are
+allowed to pull. `setup-upwarden` closes that door — it routes every fetch
+through the Upwarden proxy under your CI's own OIDC identity, so each request is
+**authenticated, attributed, and policy-enforced**.
 
 ---
 
 ## Quick start
 
-Every call needs `ecosystem:`. The `mode:` is **auto-detected** if you omit it
-(see [Auth modes](#auth-modes)). Below is the minimal 2-line customer snippet for
-each mode, and the one-line-different variant for each ecosystem.
-
-### By auth mode
-
-| mode | snippet | needs `id-token: write`? |
-|---|---|---|
-| `static` | `ecosystem:` + `mode: static` + `tenant-vk:` | no |
-| `keyed` | `ecosystem:` + `mode: keyed` + `tenant-vk:` | **yes** |
-| `keyless` *(coming)* | `ecosystem:` + `mode: keyless` (no `tenant-vk`) | **yes** |
+Keyless is the default. Grant the job the two least-privilege permissions an
+OIDC exchange needs, add one step, and install as usual:
 
 ```yaml
-# static — a long-lived vk_ used directly (works on ANY CI, even off GitHub)
+permissions:
+  contents: read       # checkout
+  id-token: write      # lets the job mint its GitHub OIDC token
+
+steps:
+  - uses: actions/checkout@v4
+  - uses: upwarden-io/setup-upwarden@v1
+    with:
+      ecosystem: npm     # npm | pip | maven
+  - run: npm ci          # flows through npm.pkg.upwarden.io, authenticated
+```
+
+No `vk_` secret to store or rotate — the tenant is derived from your CI's signed
+OIDC identity, and the action mints a short-lived, run-scoped token for the
+fetch. Grant `id-token: write` at the **job** level, only on the jobs that
+authenticate.
+
+> **Off GitHub, or no OIDC?** Use **Static** mode with an Upwarden key used
+> directly as the registry credential — see [Auth modes](#auth-modes). Store the
+> key as a `secrets.*` value; never inline it.
+
+---
+
+## Pinning & verification
+
+`setup-upwarden` handles registry credentials — treat it as a trust boundary and
+pin it deliberately.
+
+**Pin to a full commit SHA** for supply-chain-strict pipelines (immutable by
+construction, independent of any tag):
+
+```yaml
+- uses: upwarden-io/setup-upwarden@0000000000000000000000000000000000000000  # v1.0.0
+```
+
+Or pin an **immutable released version** (`@v1.0.0`) — each release is frozen:
+its `vX.Y.Z` tag and release cannot be moved or overwritten once published, so it
+cannot be silently re-pointed. The moving **`@v1`** major tag auto-picks
+non-breaking fixes and is fine for most consumers.
+
+### Verify this release
+
+Each release is an **immutable release** — its `vX.Y.Z` tag and release are frozen
+and cannot be moved or overwritten once published. Combined with SHA-pinning, that
+gives you a **reproducible, tamper-evident reference today**.
+
+**Coming:** OCI-published **Sigstore build-provenance** attestations, verifiable
+with `gh attestation verify`. This is **not yet available** — pin by full commit
+SHA or by immutable tag until it ships.
+
+---
+
+## Auth modes
+
+Two modes. Omit `mode:` to auto-detect: **Keyless** when no key is supplied and
+the job can mint an OIDC token → **Static** otherwise.
+
+### Keyless (recommended, primary)
+
+**OIDC-only — no stored secret.** Your CI's GitHub OIDC identity is exchanged for
+a **short-lived, per-run credential**, and the tenant is resolved from your signed
+repo identity. There is nothing to store or rotate. Requires `id-token: write` on
+the job (to mint the OIDC token) plus `contents: read` (your checkout).
+
+Under the hood, keyless installs consume an **ephemeral per-run token (`vke`)**
+that npm / pip / maven read as the registry credential — because those package
+managers aren't OIDC-aware. That token is an internal detail of the data plane,
+not a mode you configure.
+
+### Static
+
+A **long-lived tenant key (`vk`)** used **directly** as the registry credential —
+for CI that can't present a GitHub OIDC identity (non-GitHub runners, a laptop).
+Store the `vk` as a `secrets.*` value; the action defensively `::add-mask::`es it
+regardless.
+
+```yaml
+# Static — a vk used directly (works on ANY CI, even off GitHub)
 - uses: upwarden-io/setup-upwarden@v1
   with:
     ecosystem: pip
@@ -59,92 +134,9 @@ each mode, and the one-line-different variant for each ecosystem.
     tenant-vk: ${{ secrets.UPWARDEN_TENANT_VK }}
 ```
 
-```yaml
-# keyed — OIDC JWT exchanged WITH a vk_ selector → short-lived vke_ (recommended)
-permissions:
-  contents: read
-  id-token: write            # REQUIRED — lets the job mint the OIDC token
-steps:
-  - uses: upwarden-io/setup-upwarden@v1
-    with:
-      ecosystem: npm
-      mode: keyed
-      tenant-vk: ${{ secrets.UPWARDEN_TENANT_VK }}
-```
-
-```yaml
-# keyless — OIDC JWT exchanged with NO vk_ (tenant from verified org ownership)
-permissions:
-  contents: read
-  id-token: write
-steps:
-  - uses: upwarden-io/setup-upwarden@v1
-    with:
-      ecosystem: maven
-      mode: keyless          # no tenant-vk — COMING (see Auth modes)
-```
-
-### By ecosystem
-
-Only `ecosystem:` changes; the auth block is identical.
-
-```yaml
-- uses: upwarden-io/setup-upwarden@v1        #   npm
-  with: { ecosystem: npm,   tenant-vk: '${{ secrets.UPWARDEN_TENANT_VK }}' }
-- run: npm ci
-
-- uses: upwarden-io/setup-upwarden@v1        #   pip / uv
-  with: { ecosystem: pip,   tenant-vk: '${{ secrets.UPWARDEN_TENANT_VK }}' }
-- run: pip install -r requirements.txt
-
-- uses: upwarden-io/setup-upwarden@v1        #   maven
-  with: { ecosystem: maven, tenant-vk: '${{ secrets.UPWARDEN_TENANT_VK }}' }
-- run: mvn -B verify
-```
-
-> Store `tenant-vk` as a **repository or organization secret** (`secrets.*`).
-> Never inline a `vk_` literal — a literal is not masked by the runner.
-
----
-
-## Auth modes
-
-Three modes, using the exact labels the Upwarden platform defines. Omit `mode:`
-to auto-detect: **`keyless`** when no `tenant-vk` is supplied → **`keyed`** when a
-`tenant-vk` is supplied *and* the job has `id-token: write` → **`static`**
-otherwise.
-
-### `static` (Mode A) — the vk_ *is* the credential
-
-A long-lived `vk_` is used **directly** as the registry credential (HTTP Basic /
-Bearer). No OIDC, no exchange, no network round-trip to mint. The lowest-friction
-on-ramp; the only mode that works **off** GitHub Actions (any CI, a laptop).
-
-### `keyed` (Mode B) — OIDC JWT **+** vk_ selector → short-lived `vke_`
-
-A GitHub OIDC token (`aud=upwarden.io`) is exchanged at
-`POST /api/v1/ci/exchange` **with** the `vk_` sent as `Authorization: Bearer`
-(the *tenant selector*) and the JWT in `x-upwarden-ci-oidc`. Engine verifies the
-JWT against an `oidc_trust_binding` and returns a **short-lived (~6h) `vke_`**
-used as the registry credential. This is what Upwarden dogfoods in its own CI and
-the recommended mode for GitHub-hosted builds.
-
-> **Terminology trap.** Upwarden's marketing phrase *"keyless OIDC"* refers to
-> the **ephemeral `vke_`** you get out of Mode B — it **still sends a `vk_`** as
-> the tenant selector. Mode B is *not* "no key".
-
-### `keyless` (Mode C) — OIDC JWT with **no** vk_ — **(coming)**
-
-The same exchange with **no `vk_` at all**; the tenant is derived purely from the
-GitHub-signed `repository_owner_id` via `verified_org_ownership`. No repo secret
-to store or rotate — true keyless federation, the direct analogue of GCP Workload
-Identity Federation.
-
-> ⚠️ **Mode C is being built.** It depends on an engine capability
-> (`verified_org_ownership`) whose flag is **currently OFF**; a no-`vk_` exchange
-> is rejected until it ships. The action implements the full path today and marks
-> the engine-dependent points **(engine channel in build)**. Use `keyed` with a
-> `tenant-vk` until Mode C is live.
+> **There is no separate "keyed" mode.** A `vk` passed alongside OIDC is a
+> **single-use provisioning artifact**, not a standing credential — keyless OIDC
+> is the credential model going forward.
 
 ---
 
@@ -153,139 +145,135 @@ Identity Federation.
 | input | required | default | description |
 |---|---|---|---|
 | `ecosystem` | **yes** | — | `npm` \| `pip` \| `maven`. Selects the credential file written and the default host. |
-| `mode` | no | *auto* | `static` \| `keyed` \| `keyless`. **Auto-detect:** `keyless` if no `tenant-vk`; else `keyed` if the job has `id-token: write`; else `static`. |
-| `tenant-vk` | conditional | `""` | The tenant `vk_` **secret**. Required for `static` + `keyed`; omit for `keyless`. In `static` it *is* the credential; in `keyed` it is the `Authorization: Bearer` tenant selector. |
+| `mode` | no | *auto* | `keyless` \| `static`. **Auto-detect:** `keyless` when no key is supplied and the job can mint an OIDC token; else `static`. |
+| `tenant-vk` | conditional | `""` | The Upwarden tenant key **secret**. Required for `static` (where it *is* the credential); omit for `keyless`. Store as `secrets.*`; never inline it. |
 | `registry-host` | no | *per-ecosystem* | Registry/proxy host. Defaults: npm→`npm.pkg.upwarden.io`, pip→`pypi.pkg.upwarden.io`, maven→`maven.pkg.upwarden.io`. The exchange lives on the **same host** at `/api/v1/ci/exchange`. |
 | `unit` | no | *auto* | The per-package unit **NAME** (self-declared metadata; sent as `x-upwarden-ci-unit`). Omit to auto-discover from the manifest. |
 | `working-directory` | no | `.` | Directory whose manifest is read to auto-discover `unit` (`package.json` `.name` / `pyproject.toml` `[project].name` / `pom.xml` `<artifactId>`). |
-| `audience` | no | `upwarden.io` | OIDC audience. **Must** be `upwarden.io` — the verifier pins it (`bad_audience` otherwise). Used only in `keyed`/`keyless`. |
+| `audience` | no | `upwarden.io` | OIDC audience. **Must** be `upwarden.io` — the verifier pins it (`bad_audience` otherwise). Used only in `keyless`. |
 
 ## Outputs
 
 | output | description |
 |---|---|
-| `credential-id` | Public id of the credential, safe to log. For `keyed`/`keyless`: the minted `vke_` `credential_id`. For `static`: a stable, non-reversible fingerprint of the `vk_`. Empty if auth did not complete. |
+| `credential-id` | Public id of the credential, safe to log. For `keyless`: the minted run-scoped credential's `credential_id`. For `static`: a stable, non-reversible fingerprint of the key. Empty if auth did not complete. |
 | `registry-configured` | `'true'` once the ecosystem's credential file/env is written and the job can install/publish through the proxy; `'false'` otherwise. |
-| `mode` | The auth mode actually used (`static` \| `keyed` \| `keyless`). Handy when you rely on auto-detect. |
+| `mode` | The auth mode actually used (`keyless` \| `static`). Handy when you rely on auto-detect. |
 | `registry-host` | The host that was configured (resolved default if you didn't pass one). |
-| `expires-at` | ISO-8601 UTC expiry of the credential (`keyed`/`keyless` `vke_` only; empty for `static`, which is long-lived). |
+| `expires-at` | ISO-8601 UTC expiry of the credential (`keyless` run-scoped token only; empty for `static`, which is long-lived). |
 
 ---
 
-## What it writes, per ecosystem
+## Per-ecosystem examples
 
-The action resolves a **credential** (the `vk_` directly, or the exchanged
-`vke_`), then writes it in the shape each package manager expects. Secrets are
-never written to disk in plaintext where avoidable — tokens are passed via
-`$GITHUB_ENV` and referenced by variable.
+Only `ecosystem:` changes — the auth block is identical (keyless shown; add
+`mode: static` + `tenant-vk:` for non-OIDC CI).
 
-| ecosystem | file written | how the credential is presented |
-|---|---|---|
-| `npm` | `~/.npmrc` | `registry=https://<host>/` + `//<host>/:_authToken=${…}` (Bearer) + `always-auth=true`. The token is injected via env, so it never lands on disk. |
-| `pip` | `~/.config/pip/pip.conf` **and** `PIP_INDEX_URL` / `UV_INDEX_UPWARDEN_*` env | HTTP Basic — the credential rides in the **password** slot of the index URL (`https://token:<cred>@<host>/simple/`). Works for both `pip` and `uv`. |
-| `maven` | `~/.m2/settings.xml` | `<mirror mirrorOf="*">` forces every fetch through `https://<host>/maven2`; the matching `<server>` supplies the credential as an `Authorization: Bearer` httpHeader. |
-
-In `keyed`/`keyless` the action first mints the GitHub OIDC token, POSTs it to
-`/api/v1/ci/exchange`, receives the run-scoped `vke_`, masks it, and *then*
-writes it as above. Every secret (`vk_`, the JWT, the `vke_`) is `::add-mask::`ed
-before it can appear in any log line.
-
----
-
-## Security
-
-`setup-upwarden` handles registry credentials, so treat it as a trust boundary.
-
-**Pin the action.** In order of increasing strictness:
-
-- **`@v1`** — moving major tag. Gets patches automatically. Fine for most, but a
-  moving tag is mutable — trust follows whoever can move it.
-- **`@v1.2.3`** — an immutable published version. Upwarden publishes each release
-  as an **immutable action package** (OCI on GHCR) with **Sigstore provenance**,
-  so a pinned `vX.Y.Z` cannot be silently re-pointed once published.
-- **`@<full-40-char-commit-sha>`** — supply-chain-strict pin. Immutable by
-  construction and independent of any tag. **Recommended for security-sensitive
-  pipelines.**
-
-```yaml
-# strict pin (recommended for regulated / high-value pipelines):
-- uses: upwarden-io/setup-upwarden@0000000000000000000000000000000000000000
-```
-
-**Verify provenance.** Released versions carry a Sigstore attestation. Consumers
-can verify with the GitHub CLI:
-
-```bash
-gh attestation verify --owner upwarden-io <artifact-or-image-ref>
-```
-
-**Least privilege.** Grant only what the mode needs:
+<details>
+<summary><strong>npm</strong> — writes <code>~/.npmrc</code></summary>
 
 ```yaml
 permissions:
-  contents: read       # checkout
-  id-token: write      # ONLY for keyed / keyless — omit entirely for static
+  contents: read
+  id-token: write
+steps:
+  - uses: actions/checkout@v4
+  - uses: upwarden-io/setup-upwarden@v1
+    with: { ecosystem: npm }
+  - run: npm ci   # → npm.pkg.upwarden.io, authenticated
 ```
 
-**Secret hygiene.** Store the `vk_` as a `secrets.*` value (never a literal);
-the action defensively `::add-mask::`s it anyway. The `keyed`/`keyless` `vke_` is
-short-lived (~6h) and run-scoped, which is why keyed is preferred over static.
+Writes `registry=https://npm.pkg.upwarden.io/` + `//<host>/:_authToken=${…}`
+(Bearer) + `always-auth=true`. The token is injected via env, so it never lands
+on disk.
+</details>
 
-Full trust model, reporting a vulnerability, and the audited shell surface:
-**[SECURITY.md](./SECURITY.md)**.
+<details>
+<summary><strong>pip / uv</strong> — writes <code>~/.config/pip/pip.conf</code> + <code>UV_INDEX_*</code></summary>
 
----
+```yaml
+permissions:
+  contents: read
+  id-token: write
+steps:
+  - uses: actions/checkout@v4
+  - uses: upwarden-io/setup-upwarden@v1
+    with: { ecosystem: pip }
+  - run: pip install -r requirements.txt   # → pypi.pkg.upwarden.io
+```
 
-## Versioning
+HTTP Basic — the credential rides in the **password** slot of the index URL
+(`https://token:<cred>@<host>/simple/`). Works for both `pip` and `uv`.
+</details>
 
-Upwarden follows the same convention as `actions/*` and
-`google-github-actions/*`:
+<details>
+<summary><strong>maven</strong> — writes <code>~/.m2/settings.xml</code></summary>
 
-| you write | you get | when to use |
-|---|---|---|
-| `@v1` | the newest `v1.x.y`, auto-updated (moving tag) | default; you want non-breaking fixes automatically |
-| `@v1.2.3` | that exact release (immutable package + Sigstore provenance) | you want reproducible builds with a friendly version |
-| `@<sha>` | that exact commit, forever | supply-chain-strict; trust nothing mutable |
+```yaml
+permissions:
+  contents: read
+  id-token: write
+steps:
+  - uses: actions/checkout@v4
+  - uses: upwarden-io/setup-upwarden@v1
+    with: { ecosystem: maven }
+  - run: mvn -B verify   # → maven.pkg.upwarden.io
+```
 
-- Releases are cut as `v1.0.0`, `v1.1.0`, … Each is an **immutable, signed**
-  version; the moving **`v1`** tag is retargeted to the newest compatible one.
-- Because this is a composite action, there is **no build step** — the
-  `action.yml` is the whole artifact, so a version is exactly the reviewable
-  source at that tag.
-- **Breaking changes** (renamed inputs, changed default host, `keyless`
-  semantics) bump the **major** and move consumers to `@v2`; `@v1` stays alive
-  for existing users.
-
-The full release + signing + provenance process (immutable-action publish,
-signed git tags, immutable releases, branch protection) is documented in
-**[PUBLISHING.md](./PUBLISHING.md)**.
-
----
-
-## How this maps to GCP (`google-github-actions/auth`)
-
-The mental model transfers 1:1 from Google's auth action:
-
-| concept | GCP `google-github-actions/auth` | Upwarden `setup-upwarden` |
-|---|---|---|
-| identity federation | Workload Identity Federation: GitHub OIDC → GCP, **no key** | `keyless` — GitHub OIDC → tenant via `verified_org_ownership`, **no `vk_`** *(coming)* |
-| keyed / selector | WIF **+ SA impersonation** (`service_account:`) | `keyed` — OIDC **+ `vk_` tenant selector** → `vke_` |
-| static long-lived key | `credentials_json:` (a downloaded SA key — discouraged) | `static` — a long-lived `vk_` used directly (the "any-CI" on-ramp) |
-| audience pin | `audience:` (default the WIF provider) | `audience:` — pinned to `upwarden.io` |
-| what you get out | short-lived **access token** | short-lived **`vke_`** written as the registry credential; `credential-id` output |
-| the OIDC mint | `id-token: write` on the job | `id-token: write` on the job (same requirement) |
-| downstream step | later `gcloud` / `setup-gcloud` steps just work | later `npm` / `pip` / `mvn` steps just work |
-
-The through-line: **prefer keyless federation, fall back to a keyed selector,
-keep a static long-lived key only as the lowest-friction escape hatch** — the
-same posture Google's action nudges you toward, applied to Upwarden's package
-registry instead of GCP APIs.
+A `<mirror mirrorOf="*">` forces every fetch through
+`https://maven.pkg.upwarden.io/maven2`; the matching `<server>` supplies the
+credential as an `Authorization: Bearer` httpHeader.
+</details>
 
 ---
 
-## License & support
+## How it works
 
-- License: see [LICENSE](./LICENSE).
-- Security policy / disclosure: [SECURITY.md](./SECURITY.md).
-- Issues & feature requests: this repository's issue tracker.
-- Docs: <https://upwarden.io>
+1. The action mints your job's **GitHub OIDC token** (keyless) — or takes your
+   key directly (static).
+2. It exchanges the OIDC token at `https://<registry-host>/api/v1/ci/exchange`,
+   receiving a **short-lived, run-scoped** registry credential.
+3. It writes that credential in the exact shape each package manager expects
+   (`.npmrc` / `pip.conf` / `settings.xml`), so downstream `npm` / `pip` / `mvn`
+   steps "just work" through the Upwarden proxy.
+
+Every secret — the key, the minted OIDC token, the run-scoped credential — is
+`::add-mask::`ed before any subsequent log line can surface it. Because this is
+a **composite action, there is no bundled JavaScript** — the whole trust surface
+is the readable shell in `action.yml`. Full docs at
+**[upwarden.io](https://upwarden.io)**.
+
+---
+
+## Trust & security
+
+- **Immutable releases.** Each `vX.Y.Z` is published as an immutable action
+  package — frozen once published, so a pinned version can't be silently
+  re-pointed. See [Verify this release](#verify-this-release). (Sigstore
+  build-provenance attestations are coming — not yet available.)
+- **Least privilege by construction.** Keyless needs only `id-token: write` +
+  `contents: read`; `static` needs no OIDC permissions at all.
+- **Auditable — no bundled JS.** The composite `action.yml` *is* the artifact.
+- **Supported versions & disclosure policy:** **[SECURITY.md](./SECURITY.md)**.
+  Report vulnerabilities privately via the Security tab or
+  `security@upwarden.io` — never a public issue.
+- **Release, signing & provenance process:** **[PUBLISHING.md](./PUBLISHING.md)**.
+
+---
+
+## Get started with Upwarden
+
+- **Site & product:** **[upwarden.io](https://upwarden.io)**
+- **Create a tenant / sign in to the console:**
+  **[upwarden.io](https://upwarden.io)** → sign up
+- **Docs & quickstart:** **[upwarden.io](https://upwarden.io)**
+
+**Next step:** add the [Quick start](#quick-start) step to one workflow, run it,
+and watch the authenticated, attributed fetches show up in your Upwarden
+dashboard.
+
+---
+
+## License
+
+See **[LICENSE](./LICENSE)**.

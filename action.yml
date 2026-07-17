@@ -39,12 +39,12 @@
 #   owned repo, never cross-tenant).
 # ==============================================================================
 name: "Setup Upwarden"
-description: "CI auth for Upwarden package registries (npm/pip/maven) - the Upwarden equivalent of google-github-actions/auth."
+description: "Keyless OIDC auth for CI - every dependency fetch authenticated, attributed, and policy-enforced, in two lines (npm/pip/maven)."
 author: "Upwarden"
 
 branding:
-  icon: "package"
-  color: "purple"
+  icon: "shield"
+  color: "green"
 
 inputs:
   mode:
