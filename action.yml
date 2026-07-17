@@ -39,11 +39,7 @@
 #   owned repo, never cross-tenant).
 # ==============================================================================
 name: "Setup Upwarden"
-description: >-
-  Authenticate a CI job to an Upwarden package registry (npm / pip / maven).
-  Writes the registry credential from a static vk_, or mints a GitHub OIDC token
-  and exchanges it for a short-lived vke_ (keyed / keyless). The Upwarden
-  equivalent of google-github-actions/auth.
+description: "CI auth for Upwarden package registries (npm/pip/maven) - the Upwarden equivalent of google-github-actions/auth."
 author: "Upwarden"
 
 branding:
