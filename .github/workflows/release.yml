@@ -1,0 +1,134 @@
+# ==============================================================================
+# release.yml — publish setup-upwarden as an IMMUTABLE, provenance-attested
+# GitHub Action version, on every published GitHub Release (tag vX.Y.Z).
+#
+# WHAT THIS GIVES US (and our customers)
+# --------------------------------------
+# GitHub "Immutable Actions" publishes this action to GitHub Packages / the
+# GitHub Container Registry (ghcr.io) as an OCI artifact tied to the release's
+# semantic-version tag. Two supply-chain properties result:
+#
+#   1. IMMUTABILITY. Once ghcr.io/upwarden-io/setup-upwarden:X.Y.Z is published,
+#      that exact version can never be re-pointed or overwritten. A consumer who
+#      pins `uses: upwarden-io/setup-upwarden@vX.Y.Z` resolves the packaged,
+#      frozen version instead of a mutable git tag — closing the "someone force-
+#      pushed the tag under me" class of attack WITHOUT the consumer having to
+#      pin a 40-char commit SHA. (The moving `@v1` major tag still moves; the
+#      immutable guarantee is per exact semver.)
+#
+#   2. PROVENANCE / SIGNING (Sigstore). publish-immutable-action generates a
+#      build-provenance attestation via @actions/attest, signed through Sigstore:
+#      a short-lived Fulcio certificate is minted from THIS workflow's GitHub
+#      OIDC token (hence `id-token: write`) and the signature is recorded in the
+#      Rekor transparency log. The attestation binds the published OCI digest to
+#      the repo + workflow + commit that produced it. This is why we, a public
+#      customer-facing auth action, can prove — cryptographically, not by
+#      assertion — that a given version came from this repo's release pipeline
+#      and was not tampered with.
+#
+# HOW A CONSUMER VERIFIES IT (document this in README / SECURITY):
+#
+#     gh attestation verify \
+#       oci://ghcr.io/upwarden-io/setup-upwarden:1.0.0 \
+#       --bundle-from-oci \
+#       --owner upwarden-io
+#
+#   This pulls the Sigstore bundle attached to the OCI artifact and checks it
+#   against the Rekor log, confirming the version was built by upwarden-io's
+#   own Actions workflow. Consumers may also add `--signer-workflow
+#   upwarden-io/setup-upwarden/.github/workflows/release.yml` to pin provenance
+#   to THIS exact publisher workflow.
+#
+# STATUS / PREREQUISITES — HUMAN + ORG STEPS REQUIRED (see return notes):
+#   * publish-immutable-action is versioned v0.0.x (v0.0.4 latest at authoring;
+#     the `main` README still carries a legacy "not ready for public use"
+#     banner, but the roadmap item github/roadmap#592 has moved to GA and the
+#     v0-migration tag exists specifically for live use). Treat the feature as
+#     available-but-young: PIN the publisher to a commit SHA (done below) and
+#     smoke-test the first release before trusting the moving `@v1`.
+#   * ORG OPT-IN: Immutable Actions is governed by the org/enterprise Actions
+#     "immutable releases / allow-list" setting. If upwarden-io was auto-opted-
+#     OUT during migration, publishing (and consumers resolving the packaged
+#     version) won't take effect until the org allow-list is updated. This is a
+#     UI/admin step in Org Settings → Actions — NOT something this workflow can
+#     do. Flagged in the return.
+#   * NETWORK (self-hosted runners only): publishing needs egress to ghcr.io;
+#     consumers on self-hosted runners need egress to ghcr.io AND
+#     pkg.actions.githubusercontent.com to download the packaged action. GitHub-
+#     hosted runners (used below) already have this.
+#   * PACKAGES linkage: the first publish creates the ghcr.io package under the
+#     org; confirm its visibility is Public (Org → Packages) so external
+#     customers can pull it. UI step, one-time.
+# ==============================================================================
+name: Release (immutable action)
+
+on:
+  release:
+    # Fires only when a release is PUBLISHED (not on draft/prerelease edits).
+    # GITHUB_REF then points at the release's tag (must be semver vX.Y.Z, which
+    # publish-immutable-action requires — a non-semver tag will fail fast).
+    types: [published]
+
+# Never let two release publishes race the same version.
+concurrency:
+  group: immutable-release-${{ github.ref }}
+  cancel-in-progress: false
+
+# Least privilege. These three are the exact set the publisher needs:
+#   contents: read  — checkout of the tagged tree (nothing is written back).
+#   packages: write — push the OCI artifact to ghcr.io under upwarden-io.
+#   id-token: write — mint the workflow OIDC token Sigstore/Fulcio signs with
+#                     (this is what makes the provenance attestation keyless).
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+
+jobs:
+  publish-immutable:
+    name: Publish immutable version to ghcr.io
+    runs-on: ubuntu-latest
+    steps:
+      # Guard: refuse anything that isn't a clean vMAJOR.MINOR.PATCH tag, so a
+      # stray/malformed release can't attempt a publish. (Immutable publishing
+      # requires strict semver; fail loud and early instead of mid-push.)
+      - name: Validate release tag is semver vX.Y.Z
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          if ! printf '%s' "${tag}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::release tag '${tag}' is not a strict semver vX.Y.Z — immutable publishing requires it."
+            exit 1
+          fi
+          echo "Publishing immutable action for tag ${tag}"
+
+      # SHA-pinned checkout (v4.2.2). We are a security-posture reference action;
+      # we pin our own supply chain the way we ask customers to pin us.
+      - name: Check out the tagged tree
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      # SHA-pinned publisher (actions/publish-immutable-action v0.0.4). This
+      # packages action.yml (+ any referenced files) as an OCI artifact, pushes
+      # it to ghcr.io/upwarden-io/setup-upwarden:<tag>, and attaches the
+      # Sigstore build-provenance attestation described in the header block.
+      # It reads the tag from GITHUB_REF and defaults its token to GITHUB_TOKEN.
+      - name: Publish immutable action version
+        id: publish
+        uses: actions/publish-immutable-action@4bc8754ffc40f27910afb20287dbbbb675a4e978 # v0.0.4
+
+      - name: Provenance summary
+        if: success()
+        run: |
+          {
+            echo "### Immutable action published :lock:"
+            echo ""
+            echo "- **Version:** \`${GITHUB_REF_NAME}\`"
+            echo "- **OCI artifact:** \`ghcr.io/${GITHUB_REPOSITORY,,}:${GITHUB_REF_NAME#v}\`"
+            echo ""
+            echo "Verify provenance:"
+            echo ""
+            echo '```'
+            echo "gh attestation verify oci://ghcr.io/${GITHUB_REPOSITORY,,}:${GITHUB_REF_NAME#v} \\"
+            echo "  --bundle-from-oci --owner ${GITHUB_REPOSITORY_OWNER}"
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"

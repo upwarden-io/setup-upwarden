@@ -1,0 +1,426 @@
+# ==============================================================================
+# setup-upwarden  —  the published, customer-facing GitHub Action for Upwarden
+# CI package-registry auth. This is the Upwarden equivalent of
+# google-github-actions/auth: it turns a hand-rolled "mint OIDC + curl the
+# exchange + write .npmrc" dance into a two-line `uses:` step.
+#
+#   - uses: upwarden-io/setup-upwarden@v1
+#     with:
+#       mode: keyed            # static | keyed | keyless   (auto-detected if omitted)
+#       ecosystem: npm         # npm | pip | maven
+#       tenant-vk: ${{ secrets.UPWARDEN_TENANT_VK }}
+#
+# It grounds out on the same exchange + registry wiring that Upwarden dogfoods
+# in its own CI (upwarden-io/fixtures-smoke). See README.md, SECURITY.md and
+# PUBLISHING.md for usage, the trust model, and the release/provenance process.
+#
+# THREE AUTH MODES (labels used exactly as the platform defines them):
+#   static  (Mode A) — a long-lived vk_ used DIRECTLY as the registry credential
+#                      (HTTP Basic). No OIDC, no /exchange. Works on ANY CI.
+#   keyed   (Mode B) — a GitHub OIDC JWT (aud=upwarden.io) is exchanged at
+#                      POST /api/v1/ci/exchange WITH the vk_ in Authorization:
+#                      Bearer AND the JWT in x-upwarden-ci-oidc; engine verifies
+#                      the JWT + oidc_trust_binding and returns a short-lived
+#                      (~6h) vke_ used as the registry credential. This is what
+#                      fixtures-smoke does. (Marketing "keyless OIDC" = the
+#                      ephemeral vke_ — it STILL sends a vk_. Mode B is NOT "no key".)
+#   keyless (Mode C) — the same exchange with NO vk_; the tenant is derived
+#                      purely from the signed repository_owner_id via
+#                      verified_org_ownership. (coming) — depends on an engine
+#                      flag that is currently OFF; see the (engine channel in
+#                      build) markers below.
+#
+# SETTLED PER-UNIT MODEL:
+#   WHO (the security boundary) is SIGNED — the OIDC trust-binding (repository_id
+#   / repository_owner_id) or the vk_. WHICH UNIT is self-declared, NON-security
+#   METADATA: the per-package unit NAME, read at runtime from that package's own
+#   manifest and passed as the x-upwarden-ci-unit header. Safe because minting
+#   the token already requires repo control (worst case = self-mislabel inside an
+#   owned repo, never cross-tenant).
+# ==============================================================================
+name: "Setup Upwarden"
+description: >-
+  Authenticate a CI job to an Upwarden package registry (npm / pip / maven).
+  Writes the registry credential from a static vk_, or mints a GitHub OIDC token
+  and exchanges it for a short-lived vke_ (keyed / keyless). The Upwarden
+  equivalent of google-github-actions/auth.
+author: "Upwarden"
+
+branding:
+  icon: "package"
+  color: "purple"
+
+inputs:
+  mode:
+    description: >-
+      Auth mode: 'static' (vk_ used directly as the registry credential, no
+      OIDC), 'keyed' (OIDC JWT exchanged WITH a vk_ selector -> vke_), or
+      'keyless' (OIDC JWT exchanged with NO vk_; tenant from verified org
+      ownership — coming). Omit to auto-detect: keyless when no tenant-vk is
+      supplied; keyed when a tenant-vk is supplied AND the job has
+      'id-token: write'; static otherwise.
+    required: false
+    default: ""
+  ecosystem:
+    description: "Package ecosystem to configure: npm | pip | maven."
+    required: true
+  tenant-vk:
+    description: >-
+      The Upwarden tenant vk_ key. Store as a secret; never inline it. REQUIRED
+      for 'static' and 'keyed'; OMIT for 'keyless'. In 'static' it IS the
+      registry credential; in 'keyed' it is the tenant selector sent as
+      Authorization: Bearer on the exchange.
+    required: false
+    default: ""
+  registry-host:
+    description: >-
+      Upwarden registry/proxy host. Defaults per ecosystem: npm ->
+      npm.pkg.upwarden.io, pip -> pypi.pkg.upwarden.io, maven ->
+      maven.pkg.upwarden.io. The exchange endpoint is served on the SAME host at
+      /api/v1/ci/exchange.
+    required: false
+    default: ""
+  unit:
+    description: >-
+      The per-package unit NAME (self-declared, non-security METADATA; sent as
+      the x-upwarden-ci-unit header). Omit to auto-discover from the manifest in
+      'working-directory' (package.json .name / pyproject.toml [project].name /
+      pom.xml <artifactId>).
+    required: false
+    default: ""
+  working-directory:
+    description: >-
+      Directory whose manifest is read to auto-discover the unit name (when
+      'unit' is omitted). Defaults to the job's working directory.
+    required: false
+    default: "."
+  audience:
+    description: >-
+      OIDC audience. MUST be upwarden.io — the verifier pins this and rejects
+      any other value with bad_audience. Only used in keyed / keyless.
+    required: false
+    default: "upwarden.io"
+
+outputs:
+  credential-id:
+    description: >-
+      Public id of the credential (safe to log). For keyed/keyless this is the
+      minted vke_ credential_id (correlate against ci_token_mints); for static
+      it is a stable fingerprint of the vk_. Empty if auth did not complete.
+    value: ${{ steps.auth.outputs.credential-id }}
+  registry-configured:
+    description: >-
+      'true' once the ecosystem's registry credential file/env has been written
+      and the job can install/publish through the Upwarden proxy; 'false'
+      otherwise.
+    value: ${{ steps.write.outputs.registry-configured }}
+  mode:
+    description: "The auth mode actually used (static | keyed | keyless)."
+    value: ${{ steps.auth.outputs.mode }}
+  registry-host:
+    description: "The registry host that was configured (resolved default if not supplied)."
+    value: ${{ steps.auth.outputs.registry-host }}
+  expires-at:
+    description: >-
+      ISO-8601 UTC expiry of the credential (keyed/keyless vke_ only; empty for
+      static, which is long-lived).
+    value: ${{ steps.auth.outputs.expires-at }}
+
+runs:
+  using: composite
+  steps:
+    # ------------------------------------------------------------------------
+    # 1. Resolve config + obtain the registry credential.
+    #    static  -> credential = vk_ (no network)
+    #    keyed   -> mint OIDC, POST /exchange WITH vk_ -> vke_
+    #    keyless -> mint OIDC, POST /exchange WITHOUT vk_ -> vke_   (coming)
+    #    Always resolves + carries the self-declared unit name.
+    # ------------------------------------------------------------------------
+    - id: auth
+      shell: bash
+      env:
+        IN_MODE: ${{ inputs.mode }}
+        IN_ECOSYSTEM: ${{ inputs.ecosystem }}
+        IN_TENANT_VK: ${{ inputs.tenant-vk }}
+        IN_REGISTRY_HOST: ${{ inputs.registry-host }}
+        IN_UNIT: ${{ inputs.unit }}
+        IN_WORKDIR: ${{ inputs.working-directory }}
+        IN_AUDIENCE: ${{ inputs.audience }}
+      run: |
+        set -uo pipefail
+
+        ecosystem="${IN_ECOSYSTEM}"
+        case "${ecosystem}" in
+          npm|pip|maven) : ;;
+          *) echo "::error::[setup-upwarden] unsupported ecosystem '${ecosystem}' (expected: npm | pip | maven)"; exit 1 ;;
+        esac
+
+        # Defensively mask the vk_ (secrets.* passed via with: are masked, but a
+        # literal input is not — never let it surface under set -x).
+        if [ -n "${IN_TENANT_VK}" ]; then echo "::add-mask::${IN_TENANT_VK}"; fi
+
+        have_oidc=false
+        if [ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ] && [ -n "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]; then
+          have_oidc=true
+        fi
+
+        # --- resolve mode (auto-detect when empty) ----------------------------
+        mode="${IN_MODE}"
+        if [ -z "${mode}" ]; then
+          if [ -z "${IN_TENANT_VK}" ]; then
+            mode="keyless"
+          elif [ "${have_oidc}" = "true" ]; then
+            mode="keyed"
+          else
+            mode="static"
+          fi
+          echo "[setup-upwarden] mode auto-detected: ${mode}"
+        fi
+        case "${mode}" in
+          static|keyed|keyless) : ;;
+          *) echo "::error::[setup-upwarden] invalid mode '${mode}' (expected: static | keyed | keyless)"; exit 1 ;;
+        esac
+
+        # --- resolve registry host (per-ecosystem default) --------------------
+        host="${IN_REGISTRY_HOST}"
+        if [ -z "${host}" ]; then
+          case "${ecosystem}" in
+            npm)   host="npm.pkg.upwarden.io" ;;
+            pip)   host="pypi.pkg.upwarden.io" ;;
+            maven) host="maven.pkg.upwarden.io" ;;
+          esac
+        fi
+        host="${host#https://}"; host="${host#http://}"; host="${host%/}"
+
+        # --- resolve the unit NAME (self-declared metadata) -------------------
+        # Read from the manifest in working-directory unless supplied explicitly.
+        unit="${IN_UNIT}"
+        workdir="${IN_WORKDIR:-.}"
+        if [ -z "${unit}" ]; then
+          case "${ecosystem}" in
+            npm)
+              if [ -f "${workdir}/package.json" ]; then
+                unit="$( (cd "${workdir}" && node -p "require('./package.json').name") 2>/dev/null || true)"
+              fi ;;
+            pip)
+              if [ -f "${workdir}/pyproject.toml" ]; then
+                unit="$(python3 -c 'import tomllib,sys; print(tomllib.load(open(sys.argv[1],"rb"))["project"]["name"])' "${workdir}/pyproject.toml" 2>/dev/null || true)"
+              fi ;;
+            maven)
+              if [ -f "${workdir}/pom.xml" ]; then
+                unit="$(python3 -c 'import sys,xml.etree.ElementTree as ET; ns={"m":"http://maven.apache.org/POM/4.0.0"}; r=ET.parse(sys.argv[1]).getroot(); a=r.find("m:artifactId",ns); print(a.text.strip() if a is not None else "")' "${workdir}/pom.xml" 2>/dev/null || true)"
+              fi ;;
+          esac
+          if [ -n "${unit}" ]; then
+            echo "[setup-upwarden] unit auto-discovered from manifest: ${unit}"
+          else
+            echo "::warning::[setup-upwarden] could not auto-discover a unit name from ${workdir} — proceeding with an empty unit label (attribution metadata only)."
+          fi
+        fi
+
+        credential=""
+        credential_id=""
+        expires_at=""
+
+        if [ "${mode}" = "static" ]; then
+          # ---- Mode A: the vk_ IS the registry credential (no OIDC) ----------
+          if [ -z "${IN_TENANT_VK}" ]; then
+            echo "::error::[setup-upwarden] mode=static requires 'tenant-vk'."; exit 1
+          fi
+          credential="${IN_TENANT_VK}"
+          # A safe, public correlation id: a short fingerprint of the vk_ (never
+          # the key itself). Static creds have no server-minted credential_id.
+          credential_id="vk-$(printf '%s' "${IN_TENANT_VK}" | sha256sum | cut -c1-12)"
+          echo "[setup-upwarden] static mode — using vk_ directly as the ${ecosystem} registry credential."
+        else
+          # ---- Mode B/C: mint OIDC, exchange -> short-lived vke_ --------------
+          if [ "${have_oidc}" != "true" ]; then
+            echo "::error::[setup-upwarden] mode=${mode} needs a GitHub OIDC token — add 'permissions: id-token: write' to the job."
+            exit 1
+          fi
+          if [ "${mode}" = "keyed" ] && [ -z "${IN_TENANT_VK}" ]; then
+            echo "::error::[setup-upwarden] mode=keyed requires 'tenant-vk' (the tenant selector). For no-vk_ auth use mode=keyless."
+            exit 1
+          fi
+          if [ "${mode}" = "keyless" ] && [ -n "${IN_TENANT_VK}" ]; then
+            echo "::warning::[setup-upwarden] mode=keyless ignores the supplied 'tenant-vk' (tenant is derived from verified org ownership)."
+          fi
+
+          audience="${IN_AUDIENCE:-upwarden.io}"
+          echo "[setup-upwarden] minting GitHub OIDC token (audience=${audience})"
+          oidc_token="$(curl -fsS \
+            -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${audience}" \
+            | jq -r '.value')"
+          if [ -z "${oidc_token:-}" ] || [ "${oidc_token}" = "null" ]; then
+            echo "::error::[setup-upwarden] OIDC mint returned empty — check id-token:write and egress to GitHub."
+            exit 1
+          fi
+          echo "::add-mask::${oidc_token}"
+
+          url="https://${host}/api/v1/ci/exchange"
+          echo "[setup-upwarden] exchanging at ${url} (mode=${mode}, unit=${unit:-<none>})"
+
+          # Build the header set:
+          #   x-upwarden-ci-oidc : the GitHub-signed JWT (proves WHO).
+          #   Authorization      : Bearer <vk_> — ONLY in keyed (tenant selector).
+          #   x-upwarden-ci-unit : self-declared unit NAME (non-security metadata).
+          #                        (engine channel in build) — the header channel
+          #                        for the unit label is being wired on engine;
+          #                        we also send `unit` in the JSON body so the
+          #                        exchange attributes correctly during rollout.
+          hdr_args=(-H "x-upwarden-ci-oidc: ${oidc_token}")
+          if [ "${mode}" = "keyed" ]; then
+            hdr_args+=(-H "Authorization: Bearer ${IN_TENANT_VK}")
+          fi
+          if [ -n "${unit}" ]; then
+            hdr_args+=(-H "x-upwarden-ci-unit: ${unit}")
+          fi
+
+          body_file="$(mktemp)"; trap 'rm -f "${body_file}"' EXIT
+          http_status="$(curl -sS -o "${body_file}" -w '%{http_code}' \
+            -X POST \
+            -H "Content-Type: application/json" \
+            "${hdr_args[@]}" \
+            --data "$(jq -nc --arg u "${unit}" --arg e "${ecosystem}" '{ecosystem:$e} + (if $u=="" then {} else {unit:$u} end)')" \
+            "${url}" || echo '000')"
+
+          if [ "${http_status}" != "200" ]; then
+            reason="$(jq -r '.reason // .error // "unknown"' < "${body_file}" 2>/dev/null || echo unknown)"
+            if [ "${http_status}" = "403" ] && [ "${reason}" = "no_trust_binding" ]; then
+              echo "::error::[setup-upwarden] 403 no_trust_binding — the OIDC token verified but no active oidc_trust_binding authorises this (issuer, sub, repository_id) for the tenant. An operator must provision one before the exchange will mint."
+            elif [ "${mode}" = "keyless" ] && [ "${http_status}" = "403" ]; then
+              echo "::error::[setup-upwarden] keyless exchange rejected (HTTP 403, reason=${reason}). Mode C (verified_org_ownership, no vk_) depends on an engine flag that is currently OFF — (engine channel in build). Use mode=keyed with a tenant-vk until it ships."
+            else
+              echo "::error::[setup-upwarden] exchange failed — HTTP ${http_status}, reason=${reason}."
+            fi
+            exit 1
+          fi
+
+          # 200 body carries the SECRET vke_ — parse + mask, never echo it.
+          # Field name tolerance: internal exchange returns `.credential`;
+          # some proxy builds return `.token` / `.vke`.
+          credential="$(jq -r '.credential // .token // .vke // empty' < "${body_file}")"
+          credential_id="$(jq -r '.credential_id // .credentialId // empty' < "${body_file}")"
+          expires_at="$(jq -r '.expires_at // .expiresAt // empty' < "${body_file}")"
+          if [ -z "${credential}" ]; then
+            echo "::error::[setup-upwarden] exchange returned 200 but no credential in the response."
+            exit 1
+          fi
+          echo "::add-mask::${credential}"
+          echo "[setup-upwarden] OK — minted run-scoped vke_ (credential_id=${credential_id:-<none>}, expires_at=${expires_at:-<none>})"
+        fi
+
+        # Hand the (masked) credential + resolved config to the write step.
+        echo "::add-mask::${credential}"
+        {
+          echo "credential=${credential}"
+          echo "credential-id=${credential_id}"
+          echo "expires-at=${expires_at}"
+          echo "mode=${mode}"
+          echo "ecosystem=${ecosystem}"
+          echo "registry-host=${host}"
+          echo "unit=${unit}"
+        } >> "${GITHUB_OUTPUT}"
+
+    # ------------------------------------------------------------------------
+    # 2. Write the ecosystem registry credential so the job installs/publishes
+    #    through the Upwarden proxy. The credential is presented as:
+    #      npm   -> ~/.npmrc  _authToken (Bearer) + registry=
+    #      pip   -> pip.conf index-url with Basic user:cred@host (+ UV_INDEX_* env)
+    #      maven -> ~/.m2/settings.xml  <mirror mirrorOf="*"> + <server> Bearer header
+    # ------------------------------------------------------------------------
+    - id: write
+      shell: bash
+      env:
+        ECOSYSTEM: ${{ steps.auth.outputs.ecosystem }}
+        REGISTRY_HOST: ${{ steps.auth.outputs.registry-host }}
+        MODE: ${{ steps.auth.outputs.mode }}
+        UPWARDEN_CREDENTIAL: ${{ steps.auth.outputs.credential }}
+      run: |
+        set -uo pipefail
+        echo "registry-configured=false" >> "${GITHUB_OUTPUT}"
+
+        host="${REGISTRY_HOST}"
+        cred="${UPWARDEN_CREDENTIAL}"
+        if [ -z "${cred}" ]; then
+          echo "::error::[setup-upwarden] no credential to write."; exit 1
+        fi
+        echo "::add-mask::${cred}"
+
+        case "${ECOSYSTEM}" in
+          # -- npm: token auth. static vk_ and vke_ both ride as _authToken. ----
+          npm)
+            npmrc="${HOME}/.npmrc"
+            {
+              echo "registry=https://${host}/"
+              echo "//${host}/:_authToken=\${UPWARDEN_CREDENTIAL}"
+              echo "always-auth=true"
+            } > "${npmrc}"
+            # Export the credential to subsequent steps so the ${...} in .npmrc
+            # resolves at install time without ever being written to disk.
+            echo "UPWARDEN_CREDENTIAL=${cred}" >> "${GITHUB_ENV}"
+            echo "[setup-upwarden] wrote ${npmrc} -> https://${host}/"
+            ;;
+
+          # -- pip / uv: HTTP Basic. cred rides in the PASSWORD slot. -----------
+          pip)
+            # pip.conf for pip; UV_INDEX_* env for uv. Username is a fixed
+            # literal the proxy ignores; the vk_/vke_ is the password.
+            pipdir="${HOME}/.config/pip"; mkdir -p "${pipdir}"
+            index_url="https://token:${cred}@${host}/simple/"
+            {
+              echo "[global]"
+              echo "index-url = ${index_url}"
+            } > "${pipdir}/pip.conf"
+            {
+              echo "PIP_INDEX_URL=${index_url}"
+              echo "UV_INDEX_UPWARDEN_USERNAME=token"
+              echo "UV_INDEX_UPWARDEN_PASSWORD=${cred}"
+              echo "UV_DEFAULT_INDEX=https://${host}/simple/"
+            } >> "${GITHUB_ENV}"
+            echo "::add-mask::${index_url}"
+            echo "[setup-upwarden] wrote ${pipdir}/pip.conf + UV_INDEX_UPWARDEN_* -> https://${host}/simple/"
+            ;;
+
+          # -- maven: mirror all fetches through the proxy; cred as Bearer. -----
+          maven)
+            m2="${HOME}/.m2"; mkdir -p "${m2}"
+            # Bearer works for both vke_ (keyed/keyless) and a static vk_.
+            cat > "${m2}/settings.xml" <<EOF
+        <settings xmlns="http://maven.apache.org/SETTINGS/1.0.0">
+          <mirrors>
+            <mirror>
+              <id>upwarden</id>
+              <mirrorOf>*</mirrorOf>
+              <name>Upwarden proxy</name>
+              <url>https://${host}/maven2</url>
+            </mirror>
+          </mirrors>
+          <servers>
+            <server>
+              <id>upwarden</id>
+              <configuration>
+                <httpHeaders>
+                  <property>
+                    <name>Authorization</name>
+                    <value>Bearer ${cred}</value>
+                  </property>
+                </httpHeaders>
+              </configuration>
+            </server>
+          </servers>
+        </settings>
+        EOF
+            echo "[setup-upwarden] wrote ${m2}/settings.xml -> https://${host}/maven2"
+            ;;
+
+          *)
+            echo "::error::[setup-upwarden] unsupported ecosystem '${ECOSYSTEM}'."; exit 1 ;;
+        esac
+
+        # Overwrite the placeholder line set above.
+        {
+          echo "registry-configured=true"
+        } >> "${GITHUB_OUTPUT}"
+        echo "[setup-upwarden] registry configured for ${ECOSYSTEM} (mode=${MODE})."
