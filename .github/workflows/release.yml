@@ -63,11 +63,12 @@
 name: Release (immutable action)
 
 on:
-  release:
-    # Fires only when a release is PUBLISHED (not on draft/prerelease edits).
-    # GITHUB_REF then points at the release's tag (must be semver vX.Y.Z, which
-    # publish-immutable-action requires — a non-semver tag will fail fast).
-    types: [published]
+  # DEFERRED: the `release: [published]` trigger is disabled until
+  # actions/publish-immutable-action (OCI immutable *actions*) is public-ready.
+  # Release immutability + Sigstore provenance are ALREADY provided by the repo
+  # "Immutable releases" setting (no workflow needed). Re-enable the release
+  # trigger when the OCI publisher GAs.
+  workflow_dispatch: {}
 
 # Never let two release publishes race the same version.
 concurrency:
