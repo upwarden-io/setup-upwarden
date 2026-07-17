@@ -153,10 +153,9 @@ control you have:
   - uses: upwarden-io/setup-upwarden@<40-char-sha>   # e.g. from a v1.2.0 release
   ```
 
-- **Strong — pin to an immutable released version.** Releases are published as
-  **immutable action packages** (OCI, to GHCR) with **Sigstore provenance
-  attestations**; an immutable `vX.Y.Z` tag **cannot be moved or overwritten**
-  once published, so `@v1.2.0` is as stable as a SHA while staying readable:
+- **Strong — pin to an immutable released version.** Each release is an
+  **immutable release**: the `vX.Y.Z` tag **cannot be moved or overwritten** once
+  published, so `@v1.2.0` is as stable as a SHA while staying readable:
 
   ```yaml
   - uses: upwarden-io/setup-upwarden@v1.2.0
@@ -170,18 +169,17 @@ control you have:
 We recommend **SHA or immutable `vX.Y.Z`** for anything that publishes packages
 or touches production credentials.
 
-### 2. Verify provenance
+### 2. Verify what you run
 
-Releases carry build provenance you can verify independently of the tag:
+Each release is an **immutable release**: its `vX.Y.Z` tag and release are frozen
+and **cannot be re-pointed or overwritten** once published. Combined with **SHA
+pinning** (above), that gives a reproducible, tamper-evident reference today.
 
-```bash
-# NOTE: the OCI tag has the leading "v" stripped — release v1.2.0 → :1.2.0
-gh attestation verify oci://ghcr.io/upwarden-io/setup-upwarden:1.2.0 \
-  --bundle-from-oci --owner upwarden-io
-```
-
-This confirms the action package was built by this repository's release workflow
-and has not been tampered with.
+> **Coming — OCI Sigstore build-provenance attestations.** We intend to publish
+> each version as an immutable OCI action package with a Sigstore provenance
+> attestation verifiable via `gh attestation verify`. This is **not yet available**
+> for published releases — do not rely on a `gh attestation verify` command until
+> it ships (tracked internally). Until then, use SHA / immutable-tag pinning.
 
 ### 3. Grant least privilege
 
@@ -208,8 +206,9 @@ To make the above guarantees real, the repository is configured with:
 
 - **Private vulnerability reporting** enabled (the Security-tab reporting flow).
   *(Org/repo setting — enabled in repo settings.)*
-- **Immutable releases** published via the official `actions/publish-immutable-action`
-  path, giving consumers provenance attestations and non-movable version tags.
+- **Immutable releases** (repo setting): non-movable, non-overwritable version
+  tags today. OCI Sigstore provenance attestations (via `actions/publish-immutable-action`)
+  are planned, not yet published — see §2.
   *(Requires a GitHub Release per version.)*
 - **Signed release tags** (annotated, cryptographically signed).
 - **Branch protection** on the default branch: required review (see
