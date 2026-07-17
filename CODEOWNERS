@@ -8,8 +8,8 @@
 # protection with "Require review from Code Owners" enabled. That toggle is a
 # repository setting and must be turned on separately (see SECURITY.md).
 #
-# Owner handle: @DashUmEr is the team that owns and security-reviews
-# this action. Keep the team's membership restricted to devops/security.
+# Owner: @DashUmEr (interim, until an @upwarden-io/devops team is created); owns +
+# security-reviews this action. Restrict owners to devops/security.
 
 # Default owner for everything in the repo.
 *                       @DashUmEr
