@@ -26,9 +26,9 @@
 #                      ephemeral vke_ — it STILL sends a vk_. Mode B is NOT "no key".)
 #   keyless (Mode C) — the same exchange with NO vk_; the tenant is derived
 #                      purely from the signed repository_owner_id via
-#                      verified_org_ownership. (coming) — depends on an engine
-#                      flag that is currently OFF; see the (engine channel in
-#                      build) markers below.
+#                      verified_org_ownership. LIVE — enabled in prod
+#                      (OIDC_KEYLESS_OWNERSHIP_ENABLED). This is the primary,
+#                      recommended mode.
 #
 # SETTLED PER-UNIT MODEL:
 #   WHO (the security boundary) is SIGNED — the OIDC trust-binding (repository_id
@@ -52,7 +52,7 @@ inputs:
       Auth mode: 'static' (vk_ used directly as the registry credential, no
       OIDC), 'keyed' (OIDC JWT exchanged WITH a vk_ selector -> vke_), or
       'keyless' (OIDC JWT exchanged with NO vk_; tenant from verified org
-      ownership — coming). Omit to auto-detect: keyless when no tenant-vk is
+      ownership — LIVE, primary). Omit to auto-detect: keyless when no tenant-vk is
       supplied; keyed when a tenant-vk is supplied AND the job has
       'id-token: write'; static otherwise.
     required: false
@@ -129,7 +129,7 @@ runs:
     # 1. Resolve config + obtain the registry credential.
     #    static  -> credential = vk_ (no network)
     #    keyed   -> mint OIDC, POST /exchange WITH vk_ -> vke_
-    #    keyless -> mint OIDC, POST /exchange WITHOUT vk_ -> vke_   (coming)
+    #    keyless -> mint OIDC, POST /exchange WITHOUT vk_ -> vke_   (LIVE, primary)
     #    Always resolves + carries the self-declared unit name.
     # ------------------------------------------------------------------------
     - id: auth
