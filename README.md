@@ -1,8 +1,8 @@
-<!-- TODO: brand hero image — replace the placeholder below with the Upwarden
-     wordmark/shield (commit the asset into the repo, e.g. .github/upwarden-hero.png,
-     and point the src at a raw.githubusercontent.com URL or repo-relative path). -->
 <p align="center">
-  <img src="https://raw.githubusercontent.com/upwarden-io/setup-upwarden/main/.github/upwarden-hero.png" alt="Upwarden" width="380" />
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset=".github/upwarden-hero-dark.png">
+    <img src=".github/upwarden-hero-light.png" alt="Upwarden" width="480">
+  </picture>
 </p>
 
 <h1 align="center">setup-upwarden</h1>
@@ -12,11 +12,7 @@
 </p>
 
 <p align="center">
-  <!-- Lead with the security-hygiene + provenance signals. -->
-  <a href="https://scorecard.dev/viewer/?uri=github.com/upwarden-io/setup-upwarden"><img src="https://api.scorecard.dev/projects/github.com/upwarden-io/setup-upwarden/badge" alt="OpenSSF Scorecard" /></a>
-  <a href="#verify-this-release"><img src="https://img.shields.io/badge/provenance-Sigstore%20signed-3DDC97" alt="Sigstore provenance-signed" /></a>
   <a href="https://github.com/marketplace/actions/setup-upwarden"><img src="https://img.shields.io/github/v/release/upwarden-io/setup-upwarden?label=marketplace&color=3DDC97" alt="Marketplace version" /></a>
-  <a href="https://github.com/upwarden-io/setup-upwarden/actions"><img src="https://img.shields.io/github/actions/workflow/status/upwarden-io/setup-upwarden/release.yml?label=CI" alt="CI status" /></a>
   <a href="./LICENSE"><img src="https://img.shields.io/github/license/upwarden-io/setup-upwarden?color=3DDC97" alt="License" /></a>
 </p>
 
@@ -88,57 +84,49 @@ construction, independent of any tag):
 - uses: upwarden-io/setup-upwarden@0000000000000000000000000000000000000000  # v1.0.0
 ```
 
-Or pin an **immutable released version** (`@v1.0.0`) — published as an immutable
-action package with Sigstore provenance, so it cannot be silently re-pointed
-once published. The moving **`@v1`** major tag auto-picks non-breaking fixes and
-is fine for most consumers.
+Or pin an **immutable released version** (`@v1.0.0`) — each release is frozen:
+its `vX.Y.Z` tag and release cannot be moved or overwritten once published, so it
+cannot be silently re-pointed. The moving **`@v1`** major tag auto-picks
+non-breaking fixes and is fine for most consumers.
 
 ### Verify this release
 
-Every release is published with a **Sigstore provenance attestation** — proof,
-not a claim, that the version you run was built by this repository's own release
-workflow and has not been tampered with. Verify it independently of the tag with
-the GitHub CLI:
+Each release is an **immutable release** — its `vX.Y.Z` tag and release are frozen
+and cannot be moved or overwritten once published. Combined with SHA-pinning, that
+gives you a **reproducible, tamper-evident reference today**.
 
-```bash
-# NOTE: the OCI tag has the leading "v" stripped — release v1.0.0 → :1.0.0
-gh attestation verify oci://ghcr.io/upwarden-io/setup-upwarden:1.0.0 \
-  --bundle-from-oci \
-  --owner upwarden-io
-```
-
-Add `--signer-workflow upwarden-io/setup-upwarden/.github/workflows/release.yml`
-to pin the provenance to this exact publisher workflow. A supply-chain-security
-action should prove its *own* supply chain — this is how you check ours.
+**Coming:** OCI-published **Sigstore build-provenance** attestations, verifiable
+with `gh attestation verify`. This is **not yet available** — pin by full commit
+SHA or by immutable tag until it ships.
 
 ---
 
 ## Auth modes
 
-Two modes. Omit `mode:` to auto-detect: **Keyless OIDC** when no key is supplied
-and the job can mint an OIDC token → **Static** otherwise.
+Two modes. Omit `mode:` to auto-detect: **Keyless** when no key is supplied and
+the job can mint an OIDC token → **Static** otherwise.
 
-### Keyless OIDC (primary, live)
+### Keyless (recommended, primary)
 
-The action mints a GitHub OIDC token (`aud=upwarden.io`), exchanges it at the
-registry host, and receives a **short-lived, run-scoped token** it writes as the
-registry credential. The tenant is derived from your signed CI identity — there
-is **no stored registry credential** to hold or rotate. This is the direct
-analogue of GCP Workload Identity Federation, applied to package registries.
+**OIDC-only — no stored secret.** Your CI's GitHub OIDC identity is exchanged for
+a **short-lived, per-run credential**, and the tenant is resolved from your signed
+repo identity. There is nothing to store or rotate. Requires `id-token: write` on
+the job (to mint the OIDC token) plus `contents: read` (your checkout).
 
-Requires `id-token: write` on the job (to mint the OIDC token) and
-`contents: read` (your checkout).
+Under the hood, keyless installs consume an **ephemeral per-run token (`vke`)**
+that npm / pip / maven read as the registry credential — because those package
+managers aren't OIDC-aware. That token is an internal detail of the data plane,
+not a mode you configure.
 
-### Static (a key used directly)
+### Static
 
-For CI that can't present a GitHub OIDC identity (non-GitHub runners, a laptop),
-an Upwarden key is used **directly** as the registry credential — no OIDC, no
-exchange. The lowest-friction on-ramp, and the only mode that works off GitHub
-Actions. Store the key as a `secrets.*` value; the action defensively
-`::add-mask::`es it regardless.
+A **long-lived tenant key (`vk`)** used **directly** as the registry credential —
+for CI that can't present a GitHub OIDC identity (non-GitHub runners, a laptop).
+Store the `vk` as a `secrets.*` value; the action defensively `::add-mask::`es it
+regardless.
 
 ```yaml
-# Static — a key used directly (works on ANY CI, even off GitHub)
+# Static — a vk used directly (works on ANY CI, even off GitHub)
 - uses: upwarden-io/setup-upwarden@v1
   with:
     ecosystem: pip
@@ -146,11 +134,9 @@ Actions. Store the key as a `secrets.*` value; the action defensively
     tenant-vk: ${{ secrets.UPWARDEN_TENANT_VK }}
 ```
 
-> **A note on keys.** Any `vk_` you may see today is a **single-use provisioning
-> key** used to bootstrap enrollment — not a standing credential — and that
-> bootstrap step is being removed. The ephemeral, per-run token the keyless
-> exchange mints is an internal detail of the data plane, not a mode you
-> configure. Keyless OIDC is the credential model going forward.
+> **There is no separate "keyed" mode.** A `vk` passed alongside OIDC is a
+> **single-use provisioning artifact**, not a standing credential — keyless OIDC
+> is the credential model going forward.
 
 ---
 
@@ -261,9 +247,10 @@ is the readable shell in `action.yml`. Full docs at
 
 ## Trust & security
 
-- **Signed, immutable releases.** Each `vX.Y.Z` is published as an immutable
-  action package carrying a **Sigstore provenance attestation** — see
-  [Verify this release](#verify-this-release).
+- **Immutable releases.** Each `vX.Y.Z` is published as an immutable action
+  package — frozen once published, so a pinned version can't be silently
+  re-pointed. See [Verify this release](#verify-this-release). (Sigstore
+  build-provenance attestations are coming — not yet available.)
 - **Least privilege by construction.** Keyless needs only `id-token: write` +
   `contents: read`; `static` needs no OIDC permissions at all.
 - **Auditable — no bundled JS.** The composite `action.yml` *is* the artifact.
