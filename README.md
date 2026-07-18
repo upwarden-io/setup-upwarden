@@ -125,22 +125,24 @@ its `vX.Y.Z` tag and release cannot be moved or overwritten once published, so i
 cannot be silently re-pointed. The moving **`@v2`** major tag auto-picks
 non-breaking fixes and is fine for most consumers.
 
-### How releases are signed and frozen
+### How releases are verified and frozen
 
 What is true and verifiable **today**:
 
-- **Signed annotated tags.** Every `vX.Y.Z` release tag is an annotated tag,
-  cryptographically signed by the publisher.
+- **GitHub-Verified release commit.** Each `vX.Y.Z` tag points at a commit
+  created through GitHub (a PR merge / release cut on the platform), which GitHub
+  signs server-side with its **web-flow** key. That commit carries GitHub's green
+  **Verified** badge — you can confirm it in the commit's header on github.com.
 - **Immutable releases.** Once published, a `vX.Y.Z` tag and its release are
   **frozen** — they cannot be moved or overwritten. A pinned version cannot be
   silently re-pointed underneath you.
 - **Domain-verified publisher.** The publishing organization's identity is
   domain-attested to `upwarden.io`.
 
-Combined with **full-SHA pinning** (the strongest control you have), that gives
-you a **reproducible, tamper-evident reference today** — every consumer resolves
-to exactly the same bytes, and any tampering with a published version is
-detectable.
+Combined with **pinning by full commit SHA or the immutable `vX.Y.Z` tag** (the
+strongest control you have), that gives you a **reproducible, tamper-evident
+reference today** — every consumer resolves to exactly the same bytes, and any
+tampering with a published version is detectable.
 
 ---
 
@@ -348,9 +350,10 @@ no bundled JavaScript** — the whole trust surface is readable shell. Full docs
 
 - **Immutable releases.** Each `vX.Y.Z` is published as a frozen release —
   non-movable, non-overwritable once published — so a pinned version can't be
-  silently re-pointed. See [How releases are signed and frozen](#how-releases-are-signed-and-frozen).
-- **Signed release tags** (annotated, cryptographically signed) from a
-  **domain-verified** publisher org (`upwarden.io`).
+  silently re-pointed. See [How releases are verified and frozen](#how-releases-are-verified-and-frozen).
+- **GitHub-Verified release commits** (signed server-side by GitHub's web-flow
+  key; green **Verified** badge) from a **domain-verified** publisher org
+  (`upwarden.io`), consumed via **SHA / immutable-`vX.Y.Z` pinning**.
 - **Least privilege by construction.** Keyless needs only `id-token: write` +
   `contents: read`; `static` needs no OIDC permissions at all.
 - **Auditable — no bundled JS.** The composite `action.yml` and its shell writers

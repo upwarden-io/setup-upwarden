@@ -179,12 +179,14 @@ or touches production credentials.
 ### 2. Verify what you run
 
 Each release is an **immutable release**: its `vX.Y.Z` tag and release are frozen
-and **cannot be re-pointed or overwritten** once published. Release tags are
-**annotated and cryptographically signed**, and the publisher organization's
-identity is **domain-verified** to `upwarden.io`. Combined with **full-SHA
-pinning** (above), that gives a reproducible, tamper-evident reference today:
-every consumer resolves to the same bytes, and any tampering with a published
-version is detectable.
+and **cannot be re-pointed or overwritten** once published. The release commit
+each tag points at is created through GitHub and **signed server-side by GitHub's
+web-flow key** — it carries the green **Verified** badge on github.com — and the
+publisher organization's identity is **domain-verified** to `upwarden.io`.
+Combined with **pinning by full commit SHA or the immutable `vX.Y.Z` tag**
+(above), that gives a reproducible, tamper-evident reference today: every
+consumer resolves to the same bytes, and any tampering with a published version
+is detectable.
 
 ### 3. Grant least privilege
 
@@ -213,7 +215,9 @@ To make the above guarantees real, the repository is configured with:
   *(Org/repo setting — enabled in repo settings.)*
 - **Immutable releases** (repo setting): non-movable, non-overwritable version
   tags today. *(Requires a GitHub Release per version.)*
-- **Signed release tags** (annotated, cryptographically signed).
+- **GitHub-Verified release commits.** Releases are cut on commits created
+  through GitHub, which signs them server-side with its web-flow key (green
+  **Verified** badge). *(No maintainer-held signing key is involved.)*
 - **Branch protection** on the default branch: required review (see
   `CODEOWNERS`), required status checks, and no force-pushes.
 - **Verified organization domain** (`upwarden.io`), so the publisher identity is
