@@ -7,16 +7,22 @@
 #
 #   * a <mirror> (id=upwarden, mirrorOf=central, url=<UPWARDEN_REGISTRY_URL>)
 #     so every `central` lookup is redirected at the upwarden registry, and
-#   * a <server> (id=upwarden) carrying an Authorization: Bearer header.
+#   * a <server> (id=upwarden) carrying HTTP Basic <username>/<password>.
 #
 # Maven matches a <server> to a repository/mirror by ID, so the server id MUST
 # equal the mirror id — hence both are the literal string "upwarden".
 #
+# We use HTTP Basic (not a pre-set Bearer header) because the proxy challenges
+# maven clients on a 401 with  WWW-Authenticate: Basic realm="vanguard"  — a
+# static Authorization header does not participate in that challenge-response
+# (first request / cache-miss / credential rotation), so Basic is the idiomatic
+# form. The proxy accepts the vk_/credential as the Basic password.
+#
 # Tier C, Rule 2: we NEVER write the raw credential into settings.xml. Instead
-# the header value is the LITERAL string  Bearer ${env.UPWARDEN_CREDENTIAL}  —
-# Maven interpolates ${env.X} against the process environment at resolve time,
-# so the on-disk file only ever holds an environment REFERENCE, not the token.
-# The real token lives only in the job env (exported+masked by CORE).
+# the <password> is the LITERAL string  ${env.UPWARDEN_CREDENTIAL}  — Maven
+# interpolates ${env.X} against the process environment at resolve time, so the
+# on-disk file only ever holds an environment REFERENCE, not the token. The real
+# token lives only in the job env (exported+masked by CORE).
 #
 # Inputs (all via env, exported by CORE before this writer runs):
 #   UPWARDEN_CREDENTIAL          registry credential (masked; NOT written to disk)
@@ -73,13 +79,13 @@ mkdir -p "$M2_DIR"
 # disk, so there is nothing new to ::add-mask::. The header holds only the
 # literal placeholder below.
 #
-# We pass the placeholder value in via env (AUTH_HEADER_VALUE) so the shell
-# never expands it and the python string stays clean. Single quotes keep
-# ${env.…} literal.
+# We pass the placeholder value in via env (AUTH_PASSWORD) so the shell never
+# expands it and the python string stays clean. Single quotes keep ${env.…}
+# literal.
 export UPWARDEN_SETTINGS_PATH="$SETTINGS_PATH"
 export UPWARDEN_MANAGED_ID="$MANAGED_ID"
 export UPWARDEN_MIRROR_URL="$UPWARDEN_REGISTRY_URL"
-export UPWARDEN_AUTH_HEADER_VALUE='Bearer ${env.'"$CRED_ENV_NAME"'}'
+export UPWARDEN_AUTH_PASSWORD='${env.'"$CRED_ENV_NAME"'}'
 
 python3 - <<'PY'
 import os
@@ -91,7 +97,7 @@ SETTINGS = "http://maven.apache.org/SETTINGS/1.0.0"
 path       = os.environ["UPWARDEN_SETTINGS_PATH"]
 managed_id = os.environ["UPWARDEN_MANAGED_ID"]
 mirror_url = os.environ["UPWARDEN_MIRROR_URL"]
-auth_value = os.environ["UPWARDEN_AUTH_HEADER_VALUE"]  # literal "Bearer ${env.UPWARDEN_CREDENTIAL}"
+auth_pass  = os.environ["UPWARDEN_AUTH_PASSWORD"]  # literal "${env.UPWARDEN_CREDENTIAL}"
 
 # --- Parse an existing file, or start a fresh <settings> tree ----------------
 # Preserve user comments on merge (insert_comments, py3.8+) so we don't silently
@@ -156,17 +162,16 @@ ET.SubElement(mirror, q("name")).text = "upwarden registry (setup-upwarden)"
 ET.SubElement(mirror, q("url")).text = mirror_url
 ET.SubElement(mirror, q("mirrorOf")).text = "central"
 
-# --- Add fresh <server> whose header carries the env REFERENCE ---------------
+# --- Add fresh <server> with HTTP Basic username/password --------------------
+# The proxy accepts HTTP Basic (username "token", password = the credential) and
+# challenges maven clients on 401 with Basic realm="vanguard". The <password> is
+# the ONLY place the credential is referenced: a literal ${env.…} placeholder
+# that Maven resolves at runtime. No token bytes are ever written to disk.
 servers = get_or_make(root, "servers")
 server = ET.SubElement(servers, q("server"))
 ET.SubElement(server, q("id")).text = managed_id
-configuration = ET.SubElement(server, q("configuration"))
-http_headers = ET.SubElement(configuration, q("httpHeaders"))
-prop = ET.SubElement(http_headers, q("property"))
-ET.SubElement(prop, q("name")).text = "Authorization"
-# The ONLY place the credential is referenced: a literal ${env.…} placeholder
-# that Maven resolves at runtime. No token bytes are ever written to disk.
-ET.SubElement(prop, q("value")).text = auth_value
+ET.SubElement(server, q("username")).text = "token"
+ET.SubElement(server, q("password")).text = auth_pass
 
 # --- Serialize ---------------------------------------------------------------
 # Register the default namespace with an empty prefix so the output stays
@@ -186,4 +191,4 @@ PY
 # ---------------------------------------------------------------------------
 # 4. One non-secret human log line
 # ---------------------------------------------------------------------------
-echo "setup-upwarden(maven): wired ${SETTINGS_PATH} — mirror+server id=${MANAGED_ID} (mirrorOf=central -> ${UPWARDEN_REGISTRY_URL}); Authorization resolves from \${env.${CRED_ENV_NAME}} at build time (no token on disk)."
+echo "setup-upwarden(maven): wired ${SETTINGS_PATH} — mirror+server id=${MANAGED_ID} (mirrorOf=central -> ${UPWARDEN_REGISTRY_URL}); HTTP Basic (vk_ in <server> password) resolves from \${env.${CRED_ENV_NAME}} at build time (no token on disk)."

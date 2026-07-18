@@ -4,10 +4,13 @@
 # ---------------------------------------------------------------------------
 # Wires Gradle dependency resolution through the Upwarden registry by writing a
 # global init script at ~/.gradle/init.gradle. The script declares a maven
-# repository for `allprojects` and authenticates it with an HTTP Authorization
-# header (HttpHeaderCredentials + HttpHeaderAuthentication) — the general
-# "maven-compatible-but-not-Maven" path (many proxies / GitHub-Packages-style
-# registries want a raw Bearer header rather than Basic user:pass).
+# repository for `allprojects` and authenticates it with HTTP Basic
+# (PasswordCredentials, username "token" + the credential as password). We use
+# Basic rather than a pre-set Bearer header because the proxy challenges maven
+# clients on a 401 with  WWW-Authenticate: Basic realm="vanguard"  — a static
+# Authorization header does not participate in that challenge-response (first
+# request / cache-miss / credential rotation), so Basic is the idiomatic form.
+# The proxy accepts the vk_/credential as the Basic password.
 #
 # The init script is NON-SECRET: it never embeds the credential value. At
 # resolution time Gradle reads System.getenv("UPWARDEN_CREDENTIAL"), which the
@@ -97,14 +100,13 @@ allprojects {
     repositories {
         maven {
             url = uri('${registry_url}')
-            credentials(HttpHeaderCredentials) {
-                name = "Authorization"
-                // Value is assembled at runtime from the env var CORE exported;
-                // the credential is never written to this file.
-                value = "Bearer " + System.getenv("UPWARDEN_CREDENTIAL")
-            }
-            authentication {
-                header(HttpHeaderAuthentication)
+            credentials(PasswordCredentials) {
+                // Password is read at runtime from the env var CORE exported;
+                // the credential is never written to this file. PasswordCredentials
+                // sends HTTP Basic by default, which participates in the proxy's
+                // Basic realm="vanguard" 401 challenge-response.
+                username = "token"
+                password = System.getenv("UPWARDEN_CREDENTIAL")
             }
         }
     }
@@ -114,4 +116,4 @@ EOF
 } > "${init_file}"
 
 # --- Rule 5: exactly one non-secret human log line. -------------------------
-echo "[setup-upwarden] gradle: wrote ${init_file} -> maven repo ${registry_host} (Bearer via HttpHeaderCredentials, credential read from env at runtime)"
+echo "[setup-upwarden] gradle: wrote ${init_file} -> maven repo ${registry_host} (HTTP Basic via PasswordCredentials, credential read from env at runtime)"
