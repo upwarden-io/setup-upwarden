@@ -26,8 +26,8 @@ Two private channels, either is fine:
 
 ### What to include
 
-- The affected version(s) / tag / commit SHA, and the ecosystem (`npm` / `pip` /
-  `maven`) and mode (`static` / `keyed` / `keyless`) involved.
+- The affected version(s) / tag / commit SHA, the `tool:` (e.g. `npm` / `pip` /
+  `maven`), and the mode (`keyless` / `static`) involved.
 - A concrete description of the impact — **especially anything that could expose,
   log, or exfiltrate a `vk_`, a `vke_`, or a GitHub OIDC token**, or cause the
   action to authenticate against a host other than the intended registry.
@@ -64,19 +64,19 @@ Report these to the owning surface, not this repo:
 ## Supported versions
 
 We support the **latest minor release of each active major** with security fixes.
-Consumers pinned to the moving major tag (`@v1`) receive fixes automatically on
+Consumers pinned to the moving major tag (`@v2`) receive fixes automatically on
 their next run; consumers pinned to a SHA or an immutable `vX.Y.Z` must bump.
 
 | Version           | Supported          | Notes                                                        |
 | ----------------- | ------------------ | ------------------------------------------------------------ |
-| `v1` (latest `1.x`) | :white_check_mark: | Current stable major. Security fixes land here.              |
-| `1.x` older patch | :warning:          | Superseded — receives fixes only by upgrading to latest `1.x`. |
+| `v2` (latest `2.x`) | :white_check_mark: | **Current stable major.** Security fixes land here.          |
+| `1.x`             | :warning:          | Superseded by `v2` (renamed `ecosystem`→`tool`, `@v1`→`@v2`). Receives **security** fixes only, for a documented deprecation window; upgrade to `v2` for features. |
 | `< v1` / pre-release | :x:             | Unsupported. Do not use in production.                       |
 
-When `v2` ships (a breaking change — e.g. renamed inputs, changed default host,
-or `keyless` semantics), `v1` continues to receive **security** fixes for a
-documented deprecation window announced in the release notes; new features go to
-`v2` only.
+When a future `v3` ships (a breaking change — e.g. renamed inputs, changed
+default host, or `keyless` semantics), the prior major continues to receive
+**security** fixes for a documented deprecation window announced in the release
+notes; new features go to the current major only.
 
 ---
 
@@ -86,9 +86,9 @@ documented deprecation window announced in the release notes; new features go to
 
 | Asset | Sensitivity | Where it lives |
 | --- | --- | --- |
-| Tenant key `vk_` | **Secret.** Long-lived; the tenant selector (`keyed`) or the direct credential (`static`). | Supplied via `with: tenant-vk:` from a GitHub secret; in memory during the step; written to the registry credential file **only in `static`**. |
+| Tenant key `vk_` | **Secret.** Standing (long-lived until revoked); the direct credential in `static`. | Supplied via `with: tenant-vk:` from a GitHub secret; in memory during the step; referenced from the registry credential file **only in `static`** (as an `${env}` reference, not the literal). |
 | GitHub OIDC JWT (`aud=upwarden.io`) | **Secret**, short-lived (minutes). Proves repo identity. | Minted in-step from `ACTIONS_ID_TOKEN_REQUEST_*`; sent once as `x-upwarden-ci-oidc`; never persisted. |
-| Ephemeral credential `vke_` | **Secret**, short-lived (~6h). The registry credential in `keyed`/`keyless`. | Returned by the exchange; written to the ecosystem credential file / env; masked in logs. |
+| Ephemeral credential `vke_` | **Secret**, short-lived (~6h). The registry credential in `keyless`. | Returned by the exchange; exported to the job environment as `UPWARDEN_CREDENTIAL`; referenced (not embedded) by the tool config; masked in logs. |
 | Unit name | **Non-secret metadata.** Self-declared package label (`x-upwarden-ci-unit`). | Read from the manifest; safe to log. |
 
 ### Trust boundaries & the security model
@@ -101,30 +101,37 @@ documented deprecation window announced in the release notes; new features go to
   for attribution only. It is **not** a security control: minting a token already
   requires repo control, so the worst case is a self-mislabel *inside an
   already-owned repo* — never a cross-tenant crossing.
-- **Egress is pinned.** In `keyed`/`keyless` the action talks only to the
-  resolved `registry-host` (default `*.pkg.upwarden.io`) at
-  `/api/v1/ci/exchange`, over HTTPS. The OIDC `audience` is pinned to
-  `upwarden.io` and rejected server-side otherwise (`bad_audience`).
+- **Egress is pinned.** In `keyless` the action talks only to the resolved
+  `registry-host` (default `*.pkg.upwarden.io`) at `/api/v1/ci/exchange`, over
+  HTTPS. The OIDC `audience` is pinned to `upwarden.io` and rejected server-side
+  otherwise (`bad_audience`). In `static` there is no exchange call at all.
 
 ### Defenses this action implements
 
 - **Aggressive secret masking.** Every secret — the `vk_`, the minted OIDC JWT,
-  the `vke_`, and the composed pip index URL that embeds the credential — is
-  `::add-mask::`ed before any subsequent log line can surface it, including a
+  the `vke_`, and the percent-encoded pip index URL that embeds the credential —
+  is `::add-mask::`ed before any subsequent log line can surface it, including a
   defensive mask of a literally-supplied `tenant-vk` (which GitHub does *not*
   auto-mask, unlike `secrets.*`).
-- **No secret on disk where avoidable.** For `npm` the token is passed through
-  `GITHUB_ENV` and referenced as `${UPWARDEN_CREDENTIAL}` in `.npmrc`, so the
-  literal token is not committed to the credential file.
+- **No long-lived secret persisted to disk.** The credential lives only in a
+  short-lived, masked, job-scoped environment variable (`UPWARDEN_CREDENTIAL`).
+  The on-disk config files the writers produce (`.npmrc`, `settings.xml`,
+  `init.gradle`, …) carry only an `${env}` **reference** — resolved by the tool
+  at install/build time — never a literal token. (For pip, the credential rides
+  in the `PIP_INDEX_URL` job-env value, still never a file on disk.)
 - **Fail-closed exchange.** A non-200 exchange aborts the step with a specific,
   non-secret-leaking error; the action never falls back to an unauthenticated or
   wrong-host registry.
+- **Raw credential is never an action output.** The credential is passed to the
+  per-tool writer only through the job environment; only non-secret metadata
+  (`credential-id`, `expires-at`, …) is exposed as an output.
 - **Least privilege by construction.** `static` needs **no** `permissions:` at
-  all (no OIDC). `keyed`/`keyless` need only `id-token: write` (+ your job's own
+  all (no OIDC). `keyless` needs only `id-token: write` (+ your job's own
   `contents: read`) — the action requests nothing broader.
 - **Composite = auditable.** This is a composite action: the `action.yml` shell
-  **is** the artifact. There is no bundled/minified JavaScript hiding behavior —
-  the entire trust surface is readable in one file.
+  and its per-tool writer scripts **are** the artifact. There is no
+  bundled/minified JavaScript hiding behavior — the entire trust surface is
+  readable in the repository.
 
 ### Residual risks the consumer owns
 
@@ -150,19 +157,19 @@ control you have:
 - **Strongest — pin to a full commit SHA** (immutable, supply-chain-strict):
 
   ```yaml
-  - uses: upwarden-io/setup-upwarden@<40-char-sha>   # e.g. from a v1.2.0 release
+  - uses: upwarden-io/setup-upwarden@<40-char-sha>   # e.g. from a v2.0.0 release
   ```
 
 - **Strong — pin to an immutable released version.** Each release is an
   **immutable release**: the `vX.Y.Z` tag **cannot be moved or overwritten** once
-  published, so `@v1.2.0` is as stable as a SHA while staying readable:
+  published, so `@v2.0.0` is as stable as a SHA while staying readable:
 
   ```yaml
-  - uses: upwarden-io/setup-upwarden@v1.2.0
+  - uses: upwarden-io/setup-upwarden@v2.0.0
   ```
 
-- **Convenient — pin to the moving major** (`@v1`). You get security fixes
-  automatically, at the cost of trusting that the `v1` tag is retargeted only to
+- **Convenient — pin to the moving major** (`@v2`). You get security fixes
+  automatically, at the cost of trusting that the `v2` tag is retargeted only to
   vetted releases. Fine for most consumers; combine with Dependabot to graduate
   to SHA pins over time.
 
@@ -172,21 +179,19 @@ or touches production credentials.
 ### 2. Verify what you run
 
 Each release is an **immutable release**: its `vX.Y.Z` tag and release are frozen
-and **cannot be re-pointed or overwritten** once published. Combined with **SHA
-pinning** (above), that gives a reproducible, tamper-evident reference today.
-
-> **Coming — OCI Sigstore build-provenance attestations.** We intend to publish
-> each version as an immutable OCI action package with a Sigstore provenance
-> attestation verifiable via `gh attestation verify`. This is **not yet available**
-> for published releases — do not rely on a `gh attestation verify` command until
-> it ships (tracked internally). Until then, use SHA / immutable-tag pinning.
+and **cannot be re-pointed or overwritten** once published. Release tags are
+**annotated and cryptographically signed**, and the publisher organization's
+identity is **domain-verified** to `upwarden.io`. Combined with **full-SHA
+pinning** (above), that gives a reproducible, tamper-evident reference today:
+every consumer resolves to the same bytes, and any tampering with a published
+version is detectable.
 
 ### 3. Grant least privilege
 
 ```yaml
 permissions:
   contents: read
-  id-token: write     # ONLY for keyed / keyless. Omit entirely for static.
+  id-token: write     # ONLY for keyless. Omit entirely for static.
 ```
 
 Set permissions at the **job** level, not the workflow level, and grant
@@ -196,7 +201,7 @@ Set permissions at the **job** level, not the workflow level, and grant
 
 If you believe a `vk_` was exposed, rotate it in the Upwarden console
 immediately. `vke_` credentials are short-lived and expire on their own, but
-rotate the `vk_` that mints them if the tenant selector may be compromised.
+rotate the standing `vk_` if it may be compromised.
 
 ---
 
@@ -207,9 +212,7 @@ To make the above guarantees real, the repository is configured with:
 - **Private vulnerability reporting** enabled (the Security-tab reporting flow).
   *(Org/repo setting — enabled in repo settings.)*
 - **Immutable releases** (repo setting): non-movable, non-overwritable version
-  tags today. OCI Sigstore provenance attestations (via `actions/publish-immutable-action`)
-  are planned, not yet published — see §2.
-  *(Requires a GitHub Release per version.)*
+  tags today. *(Requires a GitHub Release per version.)*
 - **Signed release tags** (annotated, cryptographically signed).
 - **Branch protection** on the default branch: required review (see
   `CODEOWNERS`), required status checks, and no force-pushes.
