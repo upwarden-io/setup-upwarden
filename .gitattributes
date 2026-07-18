@@ -1,0 +1,6 @@
+# Enforce LF line endings — the writer scripts and the composite action run on
+# Linux GitHub Actions runners, where a CR (\r) breaks bash / the shebang.
+* text=auto eol=lf
+*.sh text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
