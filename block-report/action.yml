@@ -1,0 +1,71 @@
+# ==============================================================================
+# setup-upwarden/block-report — OPT-IN run-end digest of the dependencies
+# Upwarden blocked in this CI run (CVE/policy id + severity + why + remediation).
+#
+#   - uses: upwarden-io/setup-upwarden/block-report@v2
+#     if: always()                       # run even when a block failed the install
+#
+# ZERO-SECRET, ZERO-CONFIG: it authenticates with the SAME run credential
+# setup-upwarden already put in the environment (UPWARDEN_CREDENTIAL) and reads
+# the run's OWN blocked report via the self-scoped CI route
+# (GET /api/v1/ci/run/blocked). The credential self-identifies the tenant and
+# ci_run_id, and the read is scoped to THIS run only — no admin token, no org
+# slug, no run id to supply.
+#
+# WHY A SEPARATE STEP (not part of setup-upwarden):
+#   The block set only exists AFTER your install runs, so this must execute at
+#   job end. setup-upwarden is a composite action, and composite actions cannot
+#   register a `post:` step (only JavaScript actions can, and v2 ships no bundled
+#   node_modules by design). Adding this step (or not), per job, IS the toggle:
+#     - maven/gradle: RECOMMENDED — these clients suppress the inline 403 reason,
+#       so this out-of-band report is the only channel that explains a blocked
+#       build to the developer.
+#     - every other ecosystem: OPTIONAL — the inline 403 reason-phrase +
+#       x-upwarden-block header already surface the reason at the point of failure.
+#
+# INVARIANT: never fails your build. No credential (setup-upwarden not run), a
+#   404/401, or any transient error degrades to a single informational line. Opt
+#   into a hard fail with fail-on-block: true.
+# ==============================================================================
+name: "Upwarden block report"
+description: "Run-end digest of dependencies Upwarden blocked in this CI run (CVE/policy + remediation). Recommended for maven; optional elsewhere. Zero-secret."
+author: "Upwarden"
+
+branding:
+  icon: "shield"
+  color: "green"
+
+inputs:
+  api-base:
+    description: >-
+      Base URL of the Upwarden engine API that serves the self-read CI route.
+      Override only if you are on a non-default deployment. (Engine host, not the
+      dashboard host.)
+    required: false
+    default: "https://api.upwarden.io"
+  fail-on-block:
+    description: >-
+      When true, this step exits non-zero if the run had any blocked dependency.
+      Default false — the report is informational; the firewall already failed
+      the install inline, and double-failing adds no signal.
+    required: false
+    default: "false"
+  job-summary:
+    description: >-
+      Also write a Markdown digest to the GitHub job-summary page (renders as a
+      table in the run's Summary tab). Default true.
+    required: false
+    default: "true"
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        # UPWARDEN_CREDENTIAL is exported to the job env by setup-upwarden; the
+        # self-read route authenticates with it directly (no admin token).
+        UPWARDEN_REPORT_API_BASE: ${{ inputs.api-base }}
+        UPWARDEN_REPORT_FAIL_ON_BLOCK: ${{ inputs.fail-on-block }}
+        UPWARDEN_REPORT_JOB_SUMMARY: ${{ inputs.job-summary }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: bash "${ACTION_PATH}/report.sh"

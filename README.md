@@ -319,6 +319,71 @@ The init script never embeds the token.
 
 ---
 
+## Run-end block report (`block-report`)
+
+When Upwarden **correctly blocks** a dependency (a CVE or policy catch), the rich
+detail rides in the proxy's 403 body — which package-manager clients discard.
+For npm/pnpm/yarn the block reason still reaches you inline (the 403
+reason-phrase + the `x-upwarden-block` header). **Maven hides even that** at
+default verbosity — you see only *"could not be resolved"*, which reads like a
+flaky registry. So an out-of-band, run-end digest is the channel that reaches a
+maven developer.
+
+`block-report` is a **separate, opt-in step** you add at the **end** of a job. It
+queries the run's blocked set and prints a compact digest — advisory id +
+severity + why + remediation — to the log and the job-summary page.
+
+**Zero-secret, zero-config.** It authenticates with the *same* run credential
+`setup-upwarden` already put in the environment and reads the run's **own**
+report via a self-scoped route — so there's nothing to supply:
+
+```yaml
+permissions:
+  contents: read
+  id-token: write
+steps:
+  - uses: actions/checkout@v4
+  - uses: upwarden-io/setup-upwarden@v2
+    with: { tool: maven }
+  - run: mvn -B verify
+
+  # Run-end digest of anything Upwarden blocked in this run. No inputs needed.
+  - uses: upwarden-io/setup-upwarden/block-report@v2
+    if: always()          # run even when a block failed the build above
+```
+
+**When to add it**
+
+- **maven / gradle — recommended.** These clients suppress the inline reason, so
+  this is the only channel that explains a blocked build.
+- **every other ecosystem — optional.** The inline 403 reason-phrase +
+  `x-upwarden-block` header already surface the reason at the point of failure.
+  Add it only if you want a consolidated run-end summary.
+
+Adding the step (or not), per job, **is** the toggle — there is no ecosystem-wide
+switch to reason about.
+
+**Why a separate step** — the block set only exists *after* your install runs, so
+the report must execute at job end. `setup-upwarden` is a composite action, and
+composite actions cannot register a `post:` step (only JavaScript actions can,
+and v2 ships **no** bundled `node_modules` on purpose). A thin, opt-in step keeps
+that guarantee intact.
+
+**Auth** — the step reuses the run's own credential (`UPWARDEN_CREDENTIAL`, which
+`setup-upwarden` exports to the job env) and calls a **self-scoped** CI route:
+the credential identifies the tenant and run, and the read is confined to *this*
+run only — no admin token, no org slug, no run id. It never fails your build: no
+credential (setup-upwarden not run), a 401/404, or any transient error degrades
+to a single informational line (opt into a hard fail with `fail-on-block: true`).
+
+| Input | Default | Notes |
+| --- | --- | --- |
+| `api-base` | `https://api.upwarden.io` | Engine host serving the self-read route. Override only on a non-default deployment. |
+| `fail-on-block` | `false` | `true` → step exits non-zero if the run had blocks. |
+| `job-summary` | `true` | Also write a Markdown table to the job-summary page. |
+
+---
+
 ## How it works
 
 1. **Resolve.** The action derives the wire protocol, default registry host, and
