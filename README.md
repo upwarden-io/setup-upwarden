@@ -379,7 +379,7 @@ line (opt into a hard fail with `fail-on-block: true`).
 | --- | --- | --- |
 | `org` | — (required) | Your Upwarden org/tenant slug. Non-secret. |
 | `token` | — (required) | Org admin API token with `oidc:r`. Store as a secret. |
-| `api-base` | `https://app.upwarden.io` | Override only on a non-default deployment. |
+| `api-base` | `https://api.upwarden.io` | Engine host that serves `/api/v1/admin`. Override only on a non-default deployment. |
 | `run-id` | `${{ github.run_id }}` | The `ci_run_id`; the exchange stamps the GitHub run id. |
 | `fail-on-block` | `false` | `true` → step exits non-zero if the run had blocks. |
 | `job-summary` | `true` | Also write a Markdown table to the job-summary page. |

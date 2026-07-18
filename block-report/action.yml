@@ -53,10 +53,11 @@ inputs:
     required: true
   api-base:
     description: >-
-      Base URL of the Upwarden API that serves /api/v1/admin. Override only if
-      you are on a non-default deployment.
+      Base URL of the Upwarden engine API that serves /api/v1/admin. Override
+      only if you are on a non-default deployment. (Note: this is the engine
+      host, not the dashboard host.)
     required: false
-    default: "https://app.upwarden.io"
+    default: "https://api.upwarden.io"
   run-id:
     description: >-
       The CI run id (ci_run_id). Defaults to the GitHub Actions run id, which is
