@@ -25,7 +25,8 @@ by `gh`/`git` alone — are collected in [§5](#5-human--dns--ui-checklist).**
   lint + a real end-to-end exchange smoke).
 - **The strongest supply-chain control a consumer has is pinning** — by full
   commit SHA, or by an immutable `vX.Y.Z` tag. Everything below exists to make
-  those pins trustworthy: a signed, frozen tag from a domain-verified publisher.
+  those pins trustworthy: a GitHub-Verified, frozen release commit from a
+  domain-verified publisher.
 
 ---
 
@@ -46,27 +47,27 @@ existing users. This is the `google-github-actions/auth@v2` convention.
 ### 1.2 Cut an immutable patch/minor release
 
 ```bash
-# from a green main
-git switch main && git pull --ff-only
-
 # 1. bump the version and update any version references (README examples, badges,
-#    action metadata) in the same commit that CI goes green on.
+#    action metadata) on a branch, and merge that PR into main. Merging on GitHub
+#    gives you a merge commit that GitHub signs server-side with its web-flow key
+#    — the green "Verified" badge — which is the release commit the tag points at.
+git switch main && git pull --ff-only   # fast-forward to that merged commit
 
-# 2. annotated, SIGNED tag (see §2 for how signing is set up)
-git tag -s v2.0.1 -m "setup-upwarden v2.0.1"
-git push origin v2.0.1
-
-# 3. create the GitHub Release on that tag (this is what makes it "immutable"
-#    once the repo setting is on). gh CLI is fine here:
+# 2. cut the GitHub Release directly on main. `--target main` creates the
+#    lightweight `v2.0.1` tag on the web-flow-Verified merge commit and publishes
+#    the release in one step — this is what makes it "immutable" once the repo
+#    setting is on. No local tag or signing key is involved.
 gh release create v2.0.1 \
+  --target main \
   --title "v2.0.1" \
-  --notes "…changelog…" \
-  --verify-tag
+  --notes "…changelog…"
 ```
 
 With **Immutable releases** enabled (§5), the published release + its `v2.0.1`
 tag become unmodifiable — they cannot be moved or overwritten once published, so
-a pinned version can never be silently re-pointed underneath a consumer. Docs:
+a pinned version can never be silently re-pointed underneath a consumer. The
+release commit is GitHub-**Verified** (web-flow signature); consumers pin to its
+full commit SHA or the immutable `v2.0.1` tag as their integrity control. Docs:
 <https://docs.github.com/en/actions/how-tos/create-and-publish-actions/using-immutable-releases-and-tags-to-manage-your-actions-releases>
 
 ### 1.3 Retarget the moving major tag
@@ -80,7 +81,9 @@ git push -f origin refs/tags/v2
 ```
 
 `git tag -f` + `git push -f` is the exact mechanism GitHub documents for major-tag
-management (same page as above). Prefer signing the moving tag too (`git tag -s -f`).
+management (same page as above). The moving `v2` tag is a plain lightweight tag
+pointing at the same web-flow-Verified commit as `v2.0.1`; keep no release
+attached to it so it stays movable.
 
 > Optional automation: `actions/publish-action`
 > (<https://github.com/actions/publish-action>) will retag the major from a release
@@ -89,49 +92,47 @@ management (same page as above). Prefer signing the moving tag too (`git tag -s 
 
 ---
 
-## 2. Signed release tags (GPG)
+## 2. Verified release commits (GitHub web-flow)
 
-Sign every `vX.Y.Z` release tag so the public sees GitHub's green **Verified**
-badge on the tag/release — the trust signal customers actually look at on a
-security-sensitive auth action. GitHub lights the badge for GPG keys registered
-on the signing account.
+This repo does **not** maintain a maintainer-held signing key, and release tags
+are **lightweight** (plain pointers, not signed objects — so tag-signature
+verification does not apply, and you should not point consumers at a
+tag-verification command). The integrity anchor is the **release commit**, not
+the tag.
 
-Prerequisites (one-time, per signing identity):
+How the **Verified** badge is earned — the trust signal customers actually look
+at on a security-sensitive auth action:
+
+- Every version bump lands on `main` via a **PR merged on GitHub**. GitHub creates
+  that merge commit and **signs it server-side with its web-flow key**, so the
+  commit shows the green **Verified** badge (`reason: valid`) on github.com. No
+  local signing setup, no per-maintainer key, nothing to register.
+- `gh release create vX.Y.Z --target main` (§1.2) puts the lightweight `vX.Y.Z`
+  tag on that web-flow-Verified commit and publishes the release.
+
+You can confirm a release commit is Verified at any time:
 
 ```bash
-# 1. generate a key (ed25519 or rsa4096) whose UID email is a VERIFIED email on
-#    the GitHub account that will sign releases (e.g. david@upwarden.io).
-gpg --full-generate-key
-
-# 2. export the public key
-gpg --armor --export <KEY_ID>
-
-# 3. register it on the account:
-#    UI: Settings ▸ SSH and GPG keys ▸ New GPG key  — OR —
-gh api -X POST /user/gpg_keys -f armored_public_key="$(gpg --armor --export <KEY_ID>)"
-
-# 4. tell git to sign tags with it
-git config user.signingkey <KEY_ID>
-git config tag.gpgSign true          # sign all tags by default
+# reason should be "valid", verified true (web-flow / GitHub key)
+gh api repos/upwarden-io/setup-upwarden/commits/v2.0.1 \
+  --jq '.commit.verification'
 ```
 
-Docs: adding a GPG key to your account —
-<https://docs.github.com/en/authentication/managing-commit-signature-verification/adding-a-gpg-key-to-your-github-account>
-; signing a tag — `git tag -s`
-<https://docs.github.com/en/authentication/managing-commit-signature-verification/signing-tags>.
-
-> **Signing-identity decision (human):** commits in this repo are authored by the
-> `upwarden-io-...[bot]` GitHub App identity, but a **GitHub App/bot cannot hold a
-> GPG key**. Release *tags* must therefore be signed by a real maintainer account
-> whose email is verified on GitHub (e.g. `david@upwarden.io`). Decide and document
-> who the release-signer is. This is the one identity step `gh`/`git` alone can't
-> settle — it needs a human key on a human account.
+> **No signing-identity decision needed.** Commits in this repo are authored by
+> the `upwarden-io-...[bot]` GitHub App identity, and a GitHub App/bot cannot hold
+> its own signing key — which is exactly why the integrity guarantee rides on
+> GitHub's **web-flow** signature on the merge commit rather than a maintainer-held
+> key. There is no release-signer to appoint.
 
 Together with **immutable releases** (§0/§1) and the **domain-verified publisher
-org** (§4), a signed, frozen `vX.Y.Z` tag gives consumers a reproducible,
-tamper-evident reference today: every consumer resolves to exactly the same bytes,
-and any tampering with a published version is detectable. Point consumers at
-full-SHA or immutable `vX.Y.Z` pinning as the strongest control (§0).
+org** (§4), a GitHub-Verified, frozen release commit gives consumers a
+reproducible, tamper-evident reference today: every consumer resolves to exactly
+the same bytes, and any tampering with a published version is detectable. Point
+consumers at **full-SHA or immutable `vX.Y.Z` pinning** as the strongest control
+(§0).
+
+Docs: about commit signature verification (web-flow / GitHub-signed commits) —
+<https://docs.github.com/en/authentication/managing-commit-signature-verification/about-commit-signature-verification>.
 
 ---
 
@@ -208,10 +209,6 @@ the DNS record itself is scriptable (via `gcloud`).
 
 Everything the main loop **cannot** do with `gh`/`git` alone:
 
-- **[Human decision] Release-signing identity.** A GitHub App/bot can't hold a GPG
-  key. Pick the maintainer account (e.g. `david@upwarden.io`) that signs release
-  tags, and register its GPG public key on that account (UI: *Settings ▸ SSH and GPG
-  keys*, or `gh api /user/gpg_keys` **run as that human's token**, not the bot).
 - **[UI] Enable "Immutable releases"** on the repo (repo Settings → General/Releases
   checkbox) so every `vX.Y.Z` release and its tag become unmodifiable.
 - **[UI + agreement] Marketplace listing.** Tick "Publish this Action to the GitHub
