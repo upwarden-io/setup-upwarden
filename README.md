@@ -319,6 +319,73 @@ The init script never embeds the token.
 
 ---
 
+## Run-end block report (`block-report`)
+
+When Upwarden **correctly blocks** a dependency (a CVE or policy catch), the rich
+detail rides in the proxy's 403 body — which package-manager clients discard.
+For npm/pnpm/yarn the block reason still reaches you inline (the 403
+reason-phrase + the `x-upwarden-block` header). **Maven hides even that** at
+default verbosity — you see only *"could not be resolved"*, which reads like a
+flaky registry. So an out-of-band, run-end digest is the channel that reaches a
+maven developer.
+
+`block-report` is a **separate, opt-in step** you add at the **end** of a job. It
+queries the run's blocked set and prints a compact digest — advisory id +
+severity + why + remediation — to the log and the job-summary page.
+
+```yaml
+permissions:
+  contents: read
+  id-token: write
+steps:
+  - uses: actions/checkout@v4
+  - uses: upwarden-io/setup-upwarden@v2
+    with: { tool: maven }
+  - run: mvn -B verify
+
+  # Run-end digest of anything Upwarden blocked in this run.
+  - uses: upwarden-io/setup-upwarden/block-report@v2
+    if: always()          # run even when a block failed the build above
+    with:
+      org: your-org-slug
+      token: ${{ secrets.UPWARDEN_ADMIN_TOKEN }}
+```
+
+**When to add it**
+
+- **maven / gradle — recommended.** These clients suppress the inline reason, so
+  this is the only channel that explains a blocked build.
+- **every other ecosystem — optional.** The inline 403 reason-phrase +
+  `x-upwarden-block` header already surface the reason at the point of failure.
+  Add it only if you want a consolidated run-end summary.
+
+Adding the step (or not), per job, **is** the toggle — there is no ecosystem-wide
+switch to reason about.
+
+**Why a separate step** — the block set only exists *after* your install runs, so
+the report must execute at job end. `setup-upwarden` is a composite action, and
+composite actions cannot register a `post:` step (only JavaScript actions can,
+and v2 ships **no** bundled `node_modules` on purpose). A thin, opt-in step keeps
+that guarantee intact.
+
+**Auth** — the report is an admin API read (gated by the `oidc:r` tenant
+capability). The run's own registry credential is a *proxy* credential and does
+**not** authenticate the admin API, so this step needs a separate **org admin API
+token** (role `members_basic`+) stored as a secret. It never fails your build: a
+missing token, a 404, or any transient error degrades to a single informational
+line (opt into a hard fail with `fail-on-block: true`).
+
+| Input | Default | Notes |
+| --- | --- | --- |
+| `org` | — (required) | Your Upwarden org/tenant slug. Non-secret. |
+| `token` | — (required) | Org admin API token with `oidc:r`. Store as a secret. |
+| `api-base` | `https://app.upwarden.io` | Override only on a non-default deployment. |
+| `run-id` | `${{ github.run_id }}` | The `ci_run_id`; the exchange stamps the GitHub run id. |
+| `fail-on-block` | `false` | `true` → step exits non-zero if the run had blocks. |
+| `job-summary` | `true` | Also write a Markdown table to the job-summary page. |
+
+---
+
 ## How it works
 
 1. **Resolve.** The action derives the wire protocol, default registry host, and

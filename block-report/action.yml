@@ -1,0 +1,93 @@
+# ==============================================================================
+# setup-upwarden/block-report — OPT-IN run-end digest of the dependencies
+# Upwarden blocked in this CI run (CVE/policy id + severity + why + remediation).
+#
+#   - uses: upwarden-io/setup-upwarden/block-report@v2
+#     if: always()                       # run even when a block failed the install
+#     with:
+#       org: your-org-slug
+#       token: ${{ secrets.UPWARDEN_ADMIN_TOKEN }}
+#
+# WHY A SEPARATE STEP (not part of setup-upwarden):
+#   The block set only exists AFTER your install runs, so this must execute at
+#   job end. setup-upwarden is a composite action, and composite actions cannot
+#   register a `post:` step — only JavaScript actions can, and v2 is deliberately
+#   dependency-free (no bundled node_modules to audit). So the run-end report is
+#   its own thin, opt-in step. Adding it (or not), per job, IS the toggle:
+#     - maven jobs: RECOMMENDED — maven hides even the 403 reason-phrase, so this
+#       out-of-band report is the only channel that reaches a maven developer.
+#     - every other ecosystem: OPTIONAL — the inline 403 reason-phrase +
+#       x-upwarden-block header already surface the reason at the point of failure.
+#
+# AUTH: the run's own registry credential (UPWARDEN_CREDENTIAL) is a PROXY
+#   credential and does NOT authenticate the admin API. This report is an admin
+#   JSON API read gated by the oidc:r tenant capability, so it needs a separate
+#   org admin API token (role members_basic+) — the same class the dashboard
+#   uses. Store it as a secret. (Engine has flagged a future path to let the
+#   run's own vke_ self-read its own run, which would remove this extra secret.)
+#
+# INVARIANT: never fails your build. A missing token, a 404 (run pulled nothing
+#   for this tenant), or any transient error degrades to one informational line.
+#   Opt into a hard fail with fail-on-block: true.
+# ==============================================================================
+name: "Upwarden block report"
+description: "Run-end digest of dependencies Upwarden blocked in this CI run (CVE/policy + remediation). Recommended for maven; optional elsewhere."
+author: "Upwarden"
+
+branding:
+  icon: "shield"
+  color: "green"
+
+inputs:
+  org:
+    description: >-
+      Your Upwarden org/tenant slug (the {slug} in /orgs/{slug}/runs/...). This
+      is non-secret metadata; supply it plainly.
+    required: true
+  token:
+    description: >-
+      An Upwarden org admin API token carrying the oidc:r capability (role
+      members_basic or higher) — the same class of token the dashboard uses to
+      read the admin API. REQUIRED: the run's proxy credential cannot read the
+      admin API. Store as a secret; never inline it.
+    required: true
+  api-base:
+    description: >-
+      Base URL of the Upwarden API that serves /api/v1/admin. Override only if
+      you are on a non-default deployment.
+    required: false
+    default: "https://app.upwarden.io"
+  run-id:
+    description: >-
+      The CI run id (ci_run_id). Defaults to the GitHub Actions run id, which is
+      exactly what the exchange stamps as the run's ci_run_id — leave it unless
+      you are correlating a different run.
+    required: false
+    default: ${{ github.run_id }}
+  fail-on-block:
+    description: >-
+      When true, this step exits non-zero if the run had any blocked dependency.
+      Default false — the report is informational; the firewall already failed
+      the install inline, and double-failing adds no signal.
+    required: false
+    default: "false"
+  job-summary:
+    description: >-
+      Also write a Markdown digest to the GitHub job-summary page (renders as a
+      table in the run's Summary tab). Default true.
+    required: false
+    default: "true"
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        UPWARDEN_REPORT_ORG: ${{ inputs.org }}
+        UPWARDEN_REPORT_TOKEN: ${{ inputs.token }}
+        UPWARDEN_REPORT_API_BASE: ${{ inputs.api-base }}
+        UPWARDEN_REPORT_RUN_ID: ${{ inputs.run-id }}
+        UPWARDEN_REPORT_FAIL_ON_BLOCK: ${{ inputs.fail-on-block }}
+        UPWARDEN_REPORT_JOB_SUMMARY: ${{ inputs.job-summary }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: bash "${ACTION_PATH}/report.sh"
