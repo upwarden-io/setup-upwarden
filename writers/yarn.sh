@@ -71,7 +71,7 @@ if [ -s "$GITHUB_ENV" ]; then
   # truncates $GITHUB_ENV first, swallowing it would silently wipe every prior
   # step's env vars, so we fail loud instead.
   rc=0
-  grep -Ev '^(YARN_NPM_REGISTRY_SERVER|YARN_NPM_AUTH_TOKEN)(=|<<)' "$GITHUB_ENV" > "$tmp_env" || rc=$?
+  grep -Ev '^(YARN_NPM_REGISTRY_SERVER|YARN_NPM_AUTH_TOKEN|YARN_NPM_ALWAYS_AUTH)(=|<<)' "$GITHUB_ENV" > "$tmp_env" || rc=$?
   [ "$rc" -le 1 ] || { echo '::error::[setup-upwarden] failed reading GITHUB_ENV' >&2; exit 1; }
   cat "$tmp_env" > "$GITHUB_ENV"
   rm -f "$tmp_env"
@@ -85,7 +85,11 @@ fi
 {
   printf 'YARN_NPM_REGISTRY_SERVER=%s\n' "$UPWARDEN_REGISTRY_URL"
   printf 'YARN_NPM_AUTH_TOKEN=%s\n' "$UPWARDEN_CREDENTIAL"
+  # REQUIRED: yarn Berry only sends the auth token to a NON-default registry when
+  # npmAlwaysAuth is set. Without it yarn fetches as an anonymous user and fails
+  # with "YN0041: Invalid authentication (as an anonymous user)".
+  printf 'YARN_NPM_ALWAYS_AUTH=true\n'
 } >> "$GITHUB_ENV"
 
 # --- Rule 5: exactly one non-secret human log line ----------------------------
-echo "setup-upwarden(yarn): wired Yarn Berry npm auth for ${UPWARDEN_REGISTRY_HOST:-$UPWARDEN_REGISTRY_URL} via YARN_NPM_REGISTRY_SERVER + YARN_NPM_AUTH_TOKEN (env only, no file; wd=${UPWARDEN_WORKING_DIRECTORY:-.})."
+echo "setup-upwarden(yarn): wired Yarn Berry npm auth for ${UPWARDEN_REGISTRY_HOST:-$UPWARDEN_REGISTRY_URL} via YARN_NPM_REGISTRY_SERVER + YARN_NPM_AUTH_TOKEN + YARN_NPM_ALWAYS_AUTH (env only, no file; wd=${UPWARDEN_WORKING_DIRECTORY:-.})."
