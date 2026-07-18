@@ -27,6 +27,14 @@ if [ -z "${UPWARDEN_CREDENTIAL:-}" ]; then
   exit 1
 fi
 
+# Refuse a credential carrying a newline/CR: it would inject extra lines into
+# GITHUB_ENV (a line-oriented file), corrupting the job env.
+case "${UPWARDEN_CREDENTIAL}" in
+  *$'\n'* | *$'\r'* )
+    echo "::error::[setup-upwarden] credential contains a newline/CR — refusing to write it to the environment." >&2
+    exit 1 ;;
+esac
+
 # The registry URL is what Yarn will hit; require it too so we never wire auth
 # pointed at nowhere.
 if [ -z "${UPWARDEN_REGISTRY_URL:-}" ]; then

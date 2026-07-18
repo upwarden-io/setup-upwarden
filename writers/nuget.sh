@@ -57,7 +57,7 @@ case "${CRED}" in
   *"="* )
     echo "::error::[setup-upwarden] nuget: credential contains '=', which NuGet's NuGetPackageSourceCredentials_* encoding cannot represent (it splits key/value on '='). Refusing to write a feed that would silently fail to authenticate." >&2
     exit 1 ;;
-  *"$(printf '\n')"* | *"$(printf '\r')"* )
+  *$'\n'* | *$'\r'* )
     echo "::error::[setup-upwarden] nuget: credential contains a newline/CR — refusing to write a corrupt NuGet credential." >&2
     exit 1 ;;
 esac

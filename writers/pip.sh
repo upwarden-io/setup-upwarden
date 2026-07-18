@@ -22,6 +22,14 @@ if [ -z "${UPWARDEN_CREDENTIAL:-}" ]; then
   exit 1
 fi
 
+# Refuse a credential carrying a newline/CR: it would inject extra lines into
+# GITHUB_ENV (a line-oriented file), corrupting the job env.
+case "${UPWARDEN_CREDENTIAL}" in
+  *$'\n'* | *$'\r'* )
+    echo "::error::[setup-upwarden] credential contains a newline/CR — refusing to write it to the environment." >&2
+    exit 1 ;;
+esac
+
 if [ -z "${UPWARDEN_REGISTRY_HOST:-}" ]; then
   echo "pip writer: UPWARDEN_REGISTRY_HOST is empty — cannot build PIP_INDEX_URL" >&2
   exit 1
@@ -80,7 +88,8 @@ PIP_INDEX_URL_VALUE="https://__token__:${ENCODED_CREDENTIAL}@${UPWARDEN_REGISTRY
 # exact key is the safe, comment-free way to de-dupe.
 if [ -f "$GITHUB_ENV" ]; then
   tmp="$(mktemp)"
-  grep -v '^PIP_INDEX_URL=' "$GITHUB_ENV" > "$tmp" || true
+  rc=0; grep -v '^PIP_INDEX_URL=' "$GITHUB_ENV" > "$tmp" || rc=$?
+  [ "$rc" -le 1 ] || { echo "::error::[setup-upwarden] failed reading GITHUB_ENV" >&2; exit 1; }
   mv "$tmp" "$GITHUB_ENV"
 fi
 

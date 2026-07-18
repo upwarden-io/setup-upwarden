@@ -49,7 +49,7 @@ registry_host="${UPWARDEN_REGISTRY_HOST:-${registry_url}}"
 # newline would break the statement — and since this is a GLOBAL init.gradle, a
 # parse error breaks EVERY gradle invocation on the runner. Reject those here.
 case "${registry_url}" in
-  *"'"* | *"\\"* | *"$(printf '\n')"* )
+  *"'"* | *"\\"* | *$'\n'* )
     echo "::error::[setup-upwarden] gradle writer: UPWARDEN_REGISTRY_URL contains a single-quote, backslash, or newline; refusing to write an init.gradle that would break all gradle invocations." >&2
     exit 1 ;;
 esac

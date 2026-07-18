@@ -32,6 +32,14 @@ if [ -z "${UPWARDEN_CREDENTIAL:-}" ]; then
   exit 1
 fi
 
+# Refuse a credential carrying a newline/CR: it would inject extra lines into
+# GITHUB_ENV (a line-oriented file), corrupting the job env.
+case "${UPWARDEN_CREDENTIAL}" in
+  *$'\n'* | *$'\r'* )
+    echo "::error::[setup-upwarden] credential contains a newline/CR — refusing to write it to the environment." >&2
+    exit 1 ;;
+esac
+
 # UV_DEFAULT_INDEX needs a resolved URL — a named index with no URL is useless.
 if [ -z "${UPWARDEN_REGISTRY_URL:-}" ]; then
   echo "::error::[setup-upwarden] uv writer: UPWARDEN_REGISTRY_URL is empty; cannot set the default index URL." >&2
@@ -66,7 +74,8 @@ PASSWORD_KEY="UV_INDEX_${INDEX_NAME_UC}_PASSWORD"
 # may have written.
 if [ -s "${GITHUB_ENV}" ]; then
   tmp="$(mktemp)"
-  grep -v -E "^(${DEFAULT_INDEX_KEY}|${USERNAME_KEY}|${PASSWORD_KEY})=" "${GITHUB_ENV}" > "${tmp}" || true
+  rc=0; grep -v -E "^(${DEFAULT_INDEX_KEY}|${USERNAME_KEY}|${PASSWORD_KEY})=" "${GITHUB_ENV}" > "${tmp}" || rc=$?
+  [ "$rc" -le 1 ] || { echo "::error::[setup-upwarden] failed reading GITHUB_ENV" >&2; exit 1; }
   cat "${tmp}" > "${GITHUB_ENV}"
   rm -f "${tmp}"
 fi

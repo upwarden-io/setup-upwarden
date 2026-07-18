@@ -17,7 +17,7 @@ set -euo pipefail
 #
 # Inputs (all via env, exported by the v2 core before this writer runs):
 #   UPWARDEN_CREDENTIAL      registry credential (vke_ token today; already masked)
-#   UPWARDEN_REGISTRY_HOST   e.g. rubygems.pkg.upwarden.io
+#   UPWARDEN_REGISTRY_HOST   e.g. gems.pkg.upwarden.io
 #   UPWARDEN_REGISTRY_URL    full resolved URL (informational for bundler)
 #   UPWARDEN_TOOL            "bundler"
 #   UPWARDEN_UNIT            optional; unused by this tool
@@ -29,6 +29,14 @@ if [ -z "${UPWARDEN_CREDENTIAL:-}" ]; then
   echo "setup-upwarden(bundler): UPWARDEN_CREDENTIAL is empty; cannot wire Bundler auth." >&2
   exit 1
 fi
+
+# Refuse a credential carrying a newline/CR: it would inject extra lines into
+# GITHUB_ENV (a line-oriented file), corrupting the job env.
+case "${UPWARDEN_CREDENTIAL}" in
+  *$'\n'* | *$'\r'* )
+    echo "::error::[setup-upwarden] credential contains a newline/CR — refusing to write it to the environment." >&2
+    exit 1 ;;
+esac
 
 if [ -z "${UPWARDEN_REGISTRY_HOST:-}" ]; then
   echo "setup-upwarden(bundler): UPWARDEN_REGISTRY_HOST is empty; cannot compute BUNDLE_<HOST> var." >&2
@@ -61,7 +69,8 @@ VAR_VALUE="token:${UPWARDEN_CREDENTIAL}"
 if [ -f "$GITHUB_ENV" ]; then
   tmp_env="$(mktemp)"
   # Drop existing "BUNDLE_<HOST>=..." lines; keep all other env entries intact.
-  grep -v "^${VAR_NAME}=" "$GITHUB_ENV" > "$tmp_env" || true
+  rc=0; grep -v "^${VAR_NAME}=" "$GITHUB_ENV" > "$tmp_env" || rc=$?
+  [ "$rc" -le 1 ] || { echo "::error::[setup-upwarden] failed reading GITHUB_ENV" >&2; exit 1; }
   mv "$tmp_env" "$GITHUB_ENV"
 fi
 printf '%s=%s\n' "$VAR_NAME" "$VAR_VALUE" >> "$GITHUB_ENV"

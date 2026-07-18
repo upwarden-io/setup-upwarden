@@ -29,6 +29,14 @@ if [ -z "${UPWARDEN_CREDENTIAL}" ]; then
   exit 1
 fi
 
+# Refuse a credential carrying a newline/CR: it would inject extra lines into
+# GITHUB_ENV (a line-oriented file), corrupting the job env.
+case "${UPWARDEN_CREDENTIAL}" in
+  *$'\n'* | *$'\r'* )
+    echo "::error::[setup-upwarden] credential contains a newline/CR — refusing to write it to the environment." >&2
+    exit 1 ;;
+esac
+
 # The index needs a resolved URL; without it the sparse+ line is meaningless.
 if [ -z "${UPWARDEN_REGISTRY_URL}" ]; then
   echo "::error::[setup-upwarden/cargo] UPWARDEN_REGISTRY_URL is empty; cannot build the sparse index." >&2
@@ -52,8 +60,9 @@ MANAGED_KEYS='CARGO_REGISTRIES_UPWARDEN_INDEX CARGO_REGISTRIES_UPWARDEN_TOKEN'
 if [ -f "${GITHUB_ENV}" ]; then
   tmp="$(mktemp)"
   # Keep every line that is NOT one of our managed NAME=... assignments.
-  grep -vE '^(CARGO_REGISTRIES_UPWARDEN_INDEX|CARGO_REGISTRIES_UPWARDEN_TOKEN)=' \
-    "${GITHUB_ENV}" > "${tmp}" || true
+  rc=0; grep -vE '^(CARGO_REGISTRIES_UPWARDEN_INDEX|CARGO_REGISTRIES_UPWARDEN_TOKEN)=' \
+    "${GITHUB_ENV}" > "${tmp}" || rc=$?
+  [ "$rc" -le 1 ] || { echo "::error::[setup-upwarden] failed reading GITHUB_ENV" >&2; exit 1; }
   mv "${tmp}" "${GITHUB_ENV}"
 fi
 

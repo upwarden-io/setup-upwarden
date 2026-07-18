@@ -269,8 +269,10 @@ runs:
     #      keyless -> mint OIDC (aud=upwarden.io), POST /exchange with NO vk_
     #      keyed   -> mint OIDC, POST /exchange WITH vk_ as the tenant selector
     #      static  -> vk_ IS the credential (no OIDC, no network)
-    #    Fail closed on any non-200. The credential is emitted as a masked step
-    #    output ONLY (consumed by the export step) — never an action output.
+    #    Fail closed on any non-200. The credential is masked and then written
+    #    directly to GITHUB_ENV as UPWARDEN_CREDENTIAL (delimiter form); only
+    #    credential-id / expires-at are exposed as step outputs — never the
+    #    credential itself.
     # ========================================================================
     - id: auth
       shell: bash
