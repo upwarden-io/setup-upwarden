@@ -6,28 +6,28 @@
 # or policy catch), the rich detail rides in the proxy's 403 JSON body — which
 # package-manager clients DISCARD. maven hides even the 403 reason-phrase at
 # default verbosity, so a maven dev sees only "could not be resolved", which
-# reads as a flaky registry. This script queries the run-end report the engine
-# exposes and prints a compact, human digest of exactly what THIS run had
-# blocked (advisory id + severity + why + remediation), plus a Markdown summary
-# on the job-summary page.
+# reads as a flaky registry. This script queries the run's OWN blocked report and
+# prints a compact, human digest of exactly what THIS run had blocked (advisory
+# id + severity + why + remediation), plus a Markdown summary on the
+# job-summary page.
 #
-# CONTRACT (engine-owned): GET /api/v1/admin/orgs/{slug}/runs/{run_id}/blocked
+# CONTRACT (engine-owned): GET /api/v1/ci/run/blocked
 #   response_version: upwarden.ci-run-blocked/v1
-#   gate: oidc:r (a tenant RBAC cap — members_basic+, NOT super-admin). The run's
-#   own vke_ is a PROXY credential and does NOT authenticate the admin API, so
-#   this step needs a separate org admin API token (the `token` input).
+#   auth: the run's OWN credential (UPWARDEN_CREDENTIAL, the vke_ that
+#   setup-upwarden exported to the job env). The route is SELF-SCOPED — the
+#   credential identifies the tenant + ci_run_id and the read is confined to
+#   THIS run only. No admin token, no org slug, no run id. A missing/expired
+#   credential returns 401 {reason:vke_credential_required}.
 #
 # INVARIANT: this NEVER fails the build (unless fail-on-block=true AND blocks
 # were found). The firewall already enforced the block inline; this is
-# after-the-fact surfacing, a convenience — never a gate. Any config gap,
-# non-200, or transient error degrades to a single informational line.
+# after-the-fact surfacing, a convenience — never a gate. No credential, a
+# non-200, or any transient error degrades to a single informational line.
 # ==============================================================================
 set -uo pipefail
 
-ORG="${UPWARDEN_REPORT_ORG:-}"
-RUN_ID="${UPWARDEN_REPORT_RUN_ID:-}"
+CRED="${UPWARDEN_CREDENTIAL:-}"
 API_BASE="${UPWARDEN_REPORT_API_BASE:-}"
-TOKEN="${UPWARDEN_REPORT_TOKEN:-}"
 FAIL_ON_BLOCK="${UPWARDEN_REPORT_FAIL_ON_BLOCK:-false}"
 JOB_SUMMARY="${UPWARDEN_REPORT_JOB_SUMMARY:-true}"
 # TEST-ONLY: read this local JSON file instead of calling the API. Harmless
@@ -37,16 +37,16 @@ FIXTURE="${UPWARDEN_REPORT_FIXTURE:-}"
 info() { printf '[upwarden block-report] %s\n' "$1"; }
 
 # Degrade quietly: the report is a convenience, never a gate. Exit 0 so a
-# missing token / 404 / transient error never turns a green build red.
+# missing credential / 401 / transient error never turns a green build red.
 degrade() {
   info "$1 — skipping the run-end block report."
   info "(This never fails your build; the firewall already enforced any block inline.)"
   exit 0
 }
 
-# Mask the admin token defensively (secrets.* via with: are masked, but a literal
-# input is not — never let it surface under set -x or in a URL echo).
-[ -n "${TOKEN}" ] && echo "::add-mask::${TOKEN}"
+# The credential comes from GITHUB_ENV (already masked by setup-upwarden), but
+# mask again defensively so it can never surface under set -x here.
+[ -n "${CRED}" ] && echo "::add-mask::${CRED}"
 
 command -v jq >/dev/null 2>&1 || degrade "jq is not available on this runner"
 
@@ -56,22 +56,20 @@ if [ -n "${FIXTURE}" ]; then
   cp "${FIXTURE}" "${resp}" || degrade "could not read fixture ${FIXTURE}"
   status=200
 else
-  [ -n "${ORG}" ]      || degrade "no org slug (set the 'org' input to your Upwarden tenant slug)"
-  [ -n "${RUN_ID}" ]   || degrade "no run id"
+  [ -n "${CRED}" ]     || degrade "no run credential in the environment (run setup-upwarden before block-report)"
   [ -n "${API_BASE}" ] || degrade "no api-base"
-  [ -n "${TOKEN}" ]    || degrade "no report token (needs an org admin API token with the oidc:r capability)"
 
   API_BASE="${API_BASE%/}"
-  url="${API_BASE}/api/v1/admin/orgs/${ORG}/runs/${RUN_ID}/blocked"
-  info "querying the run-end block report (run ${RUN_ID})"
+  url="${API_BASE}/api/v1/ci/run/blocked"
+  info "querying this run's blocked report via the self-scoped CI route"
   status="$(curl -sS -o "${resp}" -w '%{http_code}' \
-    -H "Authorization: Bearer ${TOKEN}" \
+    -H "Authorization: Bearer ${CRED}" \
     -H "Accept: application/json" \
     "${url}" 2>/dev/null || echo 000)"
 fi
 
-# 404 = the run resolved zero pulls for this tenant (org-fenced, no existence
-# oracle) OR truly doesn't exist; 000/5xx = transient. All degrade quietly.
+# 401 = credential missing/expired; 404 = no run data; 000/5xx = transient.
+# All degrade quietly (never fail the build over a convenience report).
 [ "${status}" = "200" ] || degrade "report endpoint returned HTTP ${status}"
 
 jq -e . < "${resp}" >/dev/null 2>&1 || degrade "the report response was not valid JSON"
@@ -83,8 +81,10 @@ if [ -z "${count}" ] || [ "${count}" = "null" ] || [ "${count}" = "0" ]; then
 fi
 
 # --- plain-text digest to the job log -----------------------------------------
-manifest_url=""
-[ -z "${FIXTURE}" ] && manifest_url="${API_BASE}/api/v1/admin/orgs/${ORG}/runs/${RUN_ID}/manifest"
+run_repo="$(jq -r '.run.repository // ""' < "${resp}" 2>/dev/null || echo "")"
+run_rid="$(jq -r '.run.run_id // "" | tostring' < "${resp}" 2>/dev/null || echo "")"
+run_ref="${run_repo}"
+[ -n "${run_rid}" ] && run_ref="${run_ref}$([ -n "${run_ref}" ] && printf ' ')(run ${run_rid})"
 
 echo ""
 echo "=================================================================="
@@ -98,8 +98,8 @@ jq -r '
         + ( if (.advisory.url // "") != "" then "\n        " + .advisory.url else "" end )
     ),
     ""
-' < "${resp}" 2>/dev/null || info "(could not render the detailed digest; see the manifest)"
-[ -n "${manifest_url}" ] && echo "  Full manifest: ${manifest_url}"
+' < "${resp}" 2>/dev/null || info "(could not render the detailed digest)"
+[ -n "${run_ref}" ] && echo "  ${run_ref}"
 echo ""
 
 # --- Markdown digest to the job-summary page ----------------------------------

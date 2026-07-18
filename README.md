@@ -333,6 +333,10 @@ maven developer.
 queries the run's blocked set and prints a compact digest — advisory id +
 severity + why + remediation — to the log and the job-summary page.
 
+**Zero-secret, zero-config.** It authenticates with the *same* run credential
+`setup-upwarden` already put in the environment and reads the run's **own**
+report via a self-scoped route — so there's nothing to supply:
+
 ```yaml
 permissions:
   contents: read
@@ -343,12 +347,9 @@ steps:
     with: { tool: maven }
   - run: mvn -B verify
 
-  # Run-end digest of anything Upwarden blocked in this run.
+  # Run-end digest of anything Upwarden blocked in this run. No inputs needed.
   - uses: upwarden-io/setup-upwarden/block-report@v2
     if: always()          # run even when a block failed the build above
-    with:
-      org: your-org-slug
-      token: ${{ secrets.UPWARDEN_ADMIN_TOKEN }}
 ```
 
 **When to add it**
@@ -368,19 +369,16 @@ composite actions cannot register a `post:` step (only JavaScript actions can,
 and v2 ships **no** bundled `node_modules` on purpose). A thin, opt-in step keeps
 that guarantee intact.
 
-**Auth** — the report is an admin API read (gated by the `oidc:r` tenant
-capability). The run's own registry credential is a *proxy* credential and does
-**not** authenticate the admin API, so this step needs a separate **org admin API
-token** (role `members_basic`+) stored as a secret. It never fails your build: a
-missing token, a 404, or any transient error degrades to a single informational
-line (opt into a hard fail with `fail-on-block: true`).
+**Auth** — the step reuses the run's own credential (`UPWARDEN_CREDENTIAL`, which
+`setup-upwarden` exports to the job env) and calls a **self-scoped** CI route:
+the credential identifies the tenant and run, and the read is confined to *this*
+run only — no admin token, no org slug, no run id. It never fails your build: no
+credential (setup-upwarden not run), a 401/404, or any transient error degrades
+to a single informational line (opt into a hard fail with `fail-on-block: true`).
 
 | Input | Default | Notes |
 | --- | --- | --- |
-| `org` | — (required) | Your Upwarden org/tenant slug. Non-secret. |
-| `token` | — (required) | Org admin API token with `oidc:r`. Store as a secret. |
-| `api-base` | `https://api.upwarden.io` | Engine host that serves `/api/v1/admin`. Override only on a non-default deployment. |
-| `run-id` | `${{ github.run_id }}` | The `ci_run_id`; the exchange stamps the GitHub run id. |
+| `api-base` | `https://api.upwarden.io` | Engine host serving the self-read route. Override only on a non-default deployment. |
 | `fail-on-block` | `false` | `true` → step exits non-zero if the run had blocks. |
 | `job-summary` | `true` | Also write a Markdown table to the job-summary page. |
 
