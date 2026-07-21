@@ -17,7 +17,7 @@ set -euo pipefail
 #
 # Inputs (all via env, exported by the v2 core before this writer runs):
 #   UPWARDEN_CREDENTIAL      registry credential (vke_ token today; already masked)
-#   UPWARDEN_REGISTRY_HOST   e.g. gems.pkg.upwarden.io
+#   UPWARDEN_REGISTRY_HOST   e.g. rubygems.pkg.upwarden.io
 #   UPWARDEN_REGISTRY_URL    full resolved URL (informational for bundler)
 #   UPWARDEN_TOOL            "bundler"
 #   UPWARDEN_UNIT            optional; unused by this tool

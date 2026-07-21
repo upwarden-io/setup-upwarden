@@ -92,7 +92,7 @@ inputs:
       Registry/proxy host override. When omitted, defaults per tool:
       npm.pkg.upwarden.io, pypi.pkg.upwarden.io, maven.pkg.upwarden.io,
       crates.pkg.upwarden.io, go.pkg.upwarden.io, nuget.pkg.upwarden.io,
-      gems.pkg.upwarden.io. The exchange endpoint is served on the SAME host at
+      rubygems.pkg.upwarden.io. The exchange endpoint is served on the SAME host at
       /api/v1/ci/exchange.
     required: false
     default: ""
@@ -147,10 +147,10 @@ runs:
     #      npm|pnpm|yarn|yarn-classic -> npm    -> npm.pkg.upwarden.io    -> https://<host>/
     #      pip|uv|poetry              -> pypi   -> pypi.pkg.upwarden.io   -> https://<host>/simple/
     #      maven|gradle               -> maven  -> maven.pkg.upwarden.io  -> https://<host>/maven2
-    #      cargo                      -> crates -> crates.pkg.upwarden.io -> https://<host>/
+    #      cargo                      -> crates -> crates.pkg.upwarden.io -> https://<host>/index/
     #      go                         -> go     -> go.pkg.upwarden.io     -> https://<host>
     #      nuget                      -> nuget  -> nuget.pkg.upwarden.io  -> https://<host>/v3/index.json
-    #      bundler                    -> gems   -> gems.pkg.upwarden.io   -> https://<host>
+    #      bundler                    -> gems   -> rubygems.pkg.upwarden.io -> https://<host>
     #      none                       -> (exchange-only; no registry URL, no writer)
     # ------------------------------------------------------------------------
     - id: resolve
@@ -174,10 +174,10 @@ runs:
           npm|pnpm|yarn|yarn-classic) protocol="npm";    def_host="npm.pkg.upwarden.io";    url_tmpl="https://{H}/" ;;
           pip|uv|poetry)              protocol="pypi";   def_host="pypi.pkg.upwarden.io";   url_tmpl="https://{H}/simple/" ;;
           maven|gradle)               protocol="maven";  def_host="maven.pkg.upwarden.io";  url_tmpl="https://{H}/maven2" ;;
-          cargo)                      protocol="crates"; def_host="crates.pkg.upwarden.io"; url_tmpl="https://{H}/" ;;
+          cargo)                      protocol="crates"; def_host="crates.pkg.upwarden.io"; url_tmpl="https://{H}/index/" ;;
           go)                         protocol="go";     def_host="go.pkg.upwarden.io";     url_tmpl="https://{H}" ;;
           nuget)                      protocol="nuget";  def_host="nuget.pkg.upwarden.io";  url_tmpl="https://{H}/v3/index.json" ;;
-          bundler)                    protocol="gems";   def_host="gems.pkg.upwarden.io";   url_tmpl="https://{H}" ;;
+          bundler)                    protocol="gems";   def_host="rubygems.pkg.upwarden.io"; url_tmpl="https://{H}" ;;
           none)                       protocol="";       def_host="";                       url_tmpl="" ;;
           *) echo "::error::[setup-upwarden] unsupported tool '${tool}' (expected one of: npm pnpm yarn yarn-classic pip uv poetry maven gradle cargo go nuget bundler none)"; exit 1 ;;
         esac
