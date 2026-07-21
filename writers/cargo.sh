@@ -75,5 +75,18 @@ fi
   echo "CARGO_REGISTRIES_UPWARDEN_TOKEN=${UPWARDEN_CREDENTIAL}"
 } >> "${GITHUB_ENV}"
 
+# An auth-required sparse index needs a credential provider, otherwise cargo
+# errors "authenticated registries require a credential-provider" and never
+# sends the token. The built-in `cargo:token` provider consumes the
+# CARGO_REGISTRIES_UPWARDEN_TOKEN we just exported. This is a global setting, so
+# NEVER clobber an operator-supplied value: only inject our default when the key
+# is unset in the process env AND absent from GITHUB_ENV (which also keeps repeat
+# runs of this action idempotent — no duplicate line).
+provider_set="${CARGO_REGISTRY_GLOBAL_CREDENTIAL_PROVIDERS:-}"
+if [ -z "${provider_set}" ] \
+   && ! grep -qE '^CARGO_REGISTRY_GLOBAL_CREDENTIAL_PROVIDERS=' "${GITHUB_ENV}" 2>/dev/null; then
+  echo "CARGO_REGISTRY_GLOBAL_CREDENTIAL_PROVIDERS=cargo:token" >> "${GITHUB_ENV}"
+fi
+
 # Rule 5: exactly one non-secret human log line. Never echo the credential.
 echo "[setup-upwarden/cargo] wired registry 'upwarden' -> ${INDEX_VALUE} (token via env; pending-liveness)"
